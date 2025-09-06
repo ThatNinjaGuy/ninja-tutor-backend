@@ -22,40 +22,46 @@ async def upload_book(
     tags: str = Form("")  # Comma-separated tags
 ):
     """Upload a new book"""
-    book_service = BookService()
-    
-    # Parse tags
-    tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()] if tags else []
-    
-    # Create metadata
-    metadata = BookUpload(
-        title=title,
-        author=author,
-        subject=subject,
-        grade=grade,
-        description=description,
-        tags=tag_list
-    )
-    
-    # Upload and process book
-    book = await book_service.upload_book(file, metadata)
-    
-    # Return response
-    return BookResponse(
-        id=book.id,
-        title=book.title,
-        author=book.author,
-        description=book.description,
-        cover_url=book.cover_url,
-        subject=book.subject,
-        grade=book.grade,
-        type=book.type.value,
-        file_url=book.file_url,
-        total_pages=book.total_pages,
-        estimated_reading_time=book.estimated_reading_time,
-        added_at=book.added_at,
-        tags=book.tags
-    )
+    try:
+        book_service = BookService()
+        
+        # Parse tags
+        tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()] if tags else []
+        
+        # Create metadata
+        metadata = BookUpload(
+            title=title,
+            author=author,
+            subject=subject,
+            grade=grade,
+            description=description,
+            tags=tag_list
+        )
+        
+        # Upload and process book
+        book = await book_service.upload_book(file, metadata)
+        
+        # Return response
+        return BookResponse(
+            id=book.id,
+            title=book.title,
+            author=book.author,
+            description=book.description,
+            cover_url=book.cover_url,
+            subject=book.subject,
+            grade=book.grade,
+            type=book.type.value if hasattr(book.type, 'value') else str(book.type),
+            file_url=book.file_url,
+            total_pages=book.total_pages,
+            estimated_reading_time=book.estimated_reading_time,
+            added_at=book.added_at,
+            tags=book.tags
+        )
+        
+    except HTTPException:
+        raise  # Re-raise HTTPExceptions as-is
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 
 @router.get("", response_model=List[BookResponse])
@@ -71,6 +77,14 @@ async def get_books(
     return books
 
 
+@router.get("/search", response_model=List[BookResponse])
+async def search_books(q: str, limit: int = 20):
+    """Search books by title, author, or subject"""
+    book_service = BookService()
+    books = await book_service.search_books(q, limit=limit)
+    return books
+
+
 @router.get("/{book_id}", response_model=Book)
 async def get_book(book_id: str):
     """Get a single book by ID"""
@@ -81,14 +95,6 @@ async def get_book(book_id: str):
         raise HTTPException(status_code=404, detail="Book not found")
     
     return book
-
-
-@router.get("/search", response_model=List[BookResponse])
-async def search_books(q: str, limit: int = 20):
-    """Search books by title, author, or subject"""
-    book_service = BookService()
-    books = await book_service.search_books(q, limit=limit)
-    return books
 
 
 @router.delete("/{book_id}")

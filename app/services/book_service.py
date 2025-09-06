@@ -1,6 +1,7 @@
 """
 Book management service
 """
+import os
 import uuid
 from typing import List, Optional
 from datetime import datetime
@@ -21,6 +22,7 @@ class BookService:
     
     async def upload_book(self, file: UploadFile, metadata: BookUpload) -> Book:
         """Upload and process a new book"""
+        temp_file_path = None
         try:
             # Save uploaded file temporarily
             temp_file_path = await FileProcessor.save_upload_file(file)
@@ -29,12 +31,13 @@ class BookService:
             text_content, page_count = await FileProcessor.process_book_file(temp_file_path)
             reading_time = FileProcessor.estimate_reading_time(text_content)
             
-            # Upload file to Firebase Storage
-            file_url = await self.storage_service.upload_book_file(temp_file_path, file.filename)
+            # For now, use local storage instead of Firebase Storage
+            # Keep the file in uploads directory as permanent storage
+            file_url = f"/uploads/{os.path.basename(temp_file_path)}"
             
             # Create book metadata
             book_metadata = BookMetadata(
-                format=file.filename.split('.')[-1].upper(),
+                format=file.filename.split('.')[-1].upper() if file.filename else "UNKNOWN",
                 file_size=file.size / (1024 * 1024) if file.size else None  # Convert to MB
             )
             
@@ -63,17 +66,17 @@ class BookService:
             
             self.db.collection('books').document(book.id).set(book_dict)
             
-            # Cleanup temporary file
-            await FileProcessor.cleanup_file(temp_file_path)
-            
+            # Don't cleanup the file since we're using it as the permanent storage
             return book
             
         except Exception as e:
             # Cleanup on error
-            try:
-                await FileProcessor.cleanup_file(temp_file_path)
-            except:
-                pass
+            if temp_file_path:
+                try:
+                    await FileProcessor.cleanup_file(temp_file_path)
+                except Exception:
+                    pass  # Ignore cleanup errors
+            
             raise HTTPException(status_code=500, detail=f"Error uploading book: {str(e)}")
     
     async def get_books(self, limit: int = 20, offset: int = 0, 

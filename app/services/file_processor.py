@@ -6,7 +6,10 @@ import uuid
 import aiofiles
 from typing import Tuple, Optional
 from fastapi import UploadFile, HTTPException
-import PyPDF2
+try:
+    from pypdf import PdfReader
+except ImportError:
+    from PyPDF2 import PdfReader
 from docx import Document
 import tempfile
 
@@ -55,13 +58,17 @@ class FileProcessor:
             text_content = ""
             page_count = 0
             
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"File not found: {file_path}")
+            
             with open(file_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
+                pdf_reader = PdfReader(file)
                 page_count = len(pdf_reader.pages)
                 
                 for page_num in range(page_count):
                     page = pdf_reader.pages[page_num]
-                    text_content += page.extract_text() + "\n"
+                    page_text = page.extract_text()
+                    text_content += page_text + "\n"
             
             return text_content.strip(), page_count
         except Exception as e:
