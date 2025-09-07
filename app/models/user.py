@@ -4,6 +4,26 @@ User data models
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict
 from datetime import datetime
+from enum import Enum
+
+
+class ReadingStatus(str, Enum):
+    NOT_STARTED = "not_started"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    PAUSED = "paused"
+
+
+class UserBookProgress(BaseModel):
+    current_page: int = 0
+    total_pages: int = 0
+    progress_percentage: float = 0.0
+    reading_status: ReadingStatus = ReadingStatus.NOT_STARTED
+    last_read_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    reading_time_minutes: int = 0
+    notes: str = ""
 
 
 class UserPreferences(BaseModel):
