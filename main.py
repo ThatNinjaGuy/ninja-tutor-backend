@@ -19,7 +19,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan management"""
     # Startup
     print("🚀 Starting Ninja Tutor Backend...")
-    await initialize_firebase()
+    initialize_firebase()
     print("✅ Firebase initialized")
     
     # Create upload directory

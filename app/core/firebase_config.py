@@ -23,14 +23,14 @@ def get_firebase_credentials() -> dict:
     }
 
 
-async def initialize_firebase():
+def initialize_firebase():
     """Initialize Firebase Admin SDK"""
     try:
         if not firebase_admin._apps:
             cred_dict = get_firebase_credentials()
             cred = credentials.Certificate(cred_dict)
             firebase_admin.initialize_app(cred, {
-                'storageBucket': f'{settings.FIREBASE_PROJECT_ID}.appspot.com'
+                'storageBucket': 'ninja-tutor-44dec.firebasestorage.app'
             })
         print("Firebase initialized successfully")
     except Exception as e:

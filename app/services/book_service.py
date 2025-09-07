@@ -7,7 +7,7 @@ from typing import List, Optional
 from datetime import datetime
 from fastapi import UploadFile, HTTPException
 
-from ..core.firebase_config import get_db, get_storage
+from ..core.firebase_config import get_db, get_storage, initialize_firebase
 from ..models.book import Book, BookUpload, BookResponse, BookMetadata, BookType
 from .file_processor import FileProcessor
 from .firebase_storage import FirebaseStorageService
@@ -17,6 +17,8 @@ class BookService:
     """Service for managing books"""
     
     def __init__(self):
+        # Ensure Firebase is initialized
+        initialize_firebase()
         self.db = get_db()
         self.storage_service = FirebaseStorageService()
     
@@ -31,9 +33,8 @@ class BookService:
             text_content, page_count = await FileProcessor.process_book_file(temp_file_path)
             reading_time = FileProcessor.estimate_reading_time(text_content)
             
-            # For now, use local storage instead of Firebase Storage
-            # Keep the file in uploads directory as permanent storage
-            file_url = f"/uploads/{os.path.basename(temp_file_path)}"
+            # Upload file to Firebase Storage
+            file_url = await self.storage_service.upload_book_file(temp_file_path, file.filename or "book.pdf")
             
             # Create book metadata
             book_metadata = BookMetadata(
@@ -66,7 +67,13 @@ class BookService:
             
             self.db.collection('books').document(book.id).set(book_dict)
             
-            # Don't cleanup the file since we're using it as the permanent storage
+            # Clean up temporary file after successful upload to Firebase Storage
+            if temp_file_path:
+                try:
+                    await FileProcessor.cleanup_file(temp_file_path)
+                except Exception:
+                    pass  # Ignore cleanup errors
+            
             return book
             
         except Exception as e:
