@@ -18,9 +18,12 @@ class BookType(str, Enum):
 
 
 class DifficultyLevel(str, Enum):
+    """Difficulty levels matching Flutter UI"""
+    beginner = "beginner"
     easy = "easy"
     medium = "medium"
     hard = "hard"
+    expert = "expert"
 
 
 class BookMetadata(BaseModel):
@@ -93,3 +96,21 @@ class BookResponse(BaseModel):
     added_at: datetime
     tags: List[str]
     progress_percentage: float = 0.0
+
+
+class BookCardResponse(BaseModel):
+    """Lightweight response for book cards in list/grid views"""
+    id: str
+    title: str
+    author: str
+    subject: str
+    grade: str
+    cover_url: Optional[str] = None
+    total_pages: int
+    progress_percentage: float = 0.0
+    last_read_at: Optional[datetime] = None
+    added_at: datetime
+    
+    class Config:
+        # Keep original field names (snake_case) for JSON serialization
+        populate_by_name = True

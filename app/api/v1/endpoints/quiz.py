@@ -5,43 +5,145 @@ from typing import List
 from fastapi import APIRouter, HTTPException, Depends
 import uuid
 from datetime import datetime
+import logging
 
-from ....models.quiz import Quiz, QuizGenRequest, QuizResponse, QuizResult, QuestionResult
+from ....models.quiz import Quiz, QuizGenRequest, QuizResponse, QuizResult, QuestionResult, UserQuizData
 from ....services.book_service import BookService
 from ....services.ai_service import AIService
+from ....services.file_processor import FileProcessor
 from ....core.firebase_config import get_db
 from .auth import get_current_user
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
-@router.post("/generate", response_model=QuizResponse)
+@router.get("/debug/collections")
+async def debug_collections(
+    current_user_id: str = Depends(get_current_user)
+):
+    """Debug endpoint to check Firebase collections"""
+    try:
+        db = get_db()
+        
+        # Count documents in quizzes collection
+        quizzes_count = len(list(db.collection('quizzes').stream()))
+        
+        # Get sample quiz IDs
+        quiz_ids = [doc.id for doc in db.collection('quizzes').limit(5).stream()]
+        
+        return {
+            "quizzes_collection_count": quizzes_count,
+            "sample_quiz_ids": quiz_ids,
+            "user_id": current_user_id
+        }
+    except Exception as e:
+        logger.error(f"❌ Debug error: {str(e)}")
+        return {"error": str(e)}
+
+
+@router.get("/all", response_model=List[QuizResponse])
+async def list_all_quizzes(
+    current_user_id: str = Depends(get_current_user)
+):
+    """List all quizzes in the quizzes collection (for debugging)"""
+    try:
+        db = get_db()
+        quizzes_ref = db.collection('quizzes')
+        docs = quizzes_ref.stream()
+        
+        quizzes = []
+        for doc in docs:
+            quiz_data = doc.to_dict()
+            quizzes.append(QuizResponse(
+                id=doc.id,
+                title=quiz_data.get('title', 'Untitled'),
+                description=quiz_data.get('description'),
+                book_id=quiz_data.get('book_id', ''),
+                subject=quiz_data.get('subject', ''),
+                question_count=len(quiz_data.get('questions', [])),
+                difficulty=quiz_data.get('difficulty', 'medium'),
+                type=quiz_data.get('type', 'practice'),
+                created_at=quiz_data.get('created_at', datetime.now())
+            ))
+        
+        logger.info(f"📋 Found {len(quizzes)} quizzes in collection")
+        return quizzes
+        
+    except Exception as e:
+        logger.error(f"❌ Error listing quizzes: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error listing quizzes: {str(e)}")
+
+
+@router.post("/generate", response_model=Quiz)
 async def generate_quiz(
     request: QuizGenRequest,
     current_user_id: str = Depends(get_current_user)
 ):
     """Generate a quiz from book content"""
+    logger.info(f"🎯 Quiz generation started for book_id={request.book_id}, user={current_user_id}")
+    logger.info(f"📊 Request params: pages={request.page_range}, questions={request.question_count}, difficulty={request.difficulty}")
+    
     # Get book content
     book_service = BookService()
+    logger.info(f"📚 Fetching book from database...")
     book = await book_service.get_book(request.book_id)
     
     if not book:
+        logger.error(f"❌ Book not found: {request.book_id}")
         raise HTTPException(status_code=404, detail="Book not found")
     
-    if not book.content_text:
+    logger.info(f"✅ Book found: {book.title} by {book.author}")
+    logger.info(f"📄 Book file_url: {book.file_url}")
+    logger.info(f"📝 Book has content_text: {hasattr(book, 'content_text') and book.content_text is not None}")
+    
+    # Extract content from PDF if not already available
+    content_text = None
+    if hasattr(book, 'content_text') and book.content_text:
+        logger.info(f"✅ Using existing content_text ({len(book.content_text)} chars)")
+        content_text = book.content_text
+    elif book.file_url:
+        logger.info(f"📖 Extracting content from PDF: {book.file_url}")
+        try:
+            file_processor = FileProcessor()
+            # Extract from local file path (file_url contains the local path)
+            content_text = file_processor.extract_text_from_pdf(book.file_url)
+            logger.info(f"✅ Extracted {len(content_text)} characters from PDF")
+        except Exception as e:
+            logger.error(f"❌ Failed to extract PDF content: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to extract book content: {str(e)}")
+    
+    if not content_text:
+        logger.error(f"❌ No content available for book {request.book_id}")
         raise HTTPException(status_code=400, detail="Book content not available")
     
     # Generate questions using AI
+    logger.info(f"🤖 Generating questions with AI...")
     ai_service = AIService()
-    content = book.content_text[:2000]  # Sample content
-    questions = await ai_service.generate_questions(
-        content=content,
-        question_count=request.question_count,
-        difficulty=request.difficulty,
-        question_types=request.question_types
-    )
+    # Use content from requested page range (sample 3000 chars per page)
+    start_page = request.page_range[0] - 1  # 0-indexed
+    end_page = request.page_range[1]
+    chars_per_page = 3000
+    start_char = start_page * chars_per_page
+    end_char = end_page * chars_per_page
+    content = content_text[start_char:end_char] if len(content_text) > start_char else content_text[:5000]
+    
+    logger.info(f"📝 Using content slice: chars {start_char}-{end_char} (length: {len(content)})")
+    
+    try:
+        questions = await ai_service.generate_questions(
+            content=content,
+            question_count=request.question_count,
+            difficulty=request.difficulty,
+            question_types=request.question_types
+        )
+        logger.info(f"✅ Generated {len(questions)} questions")
+    except Exception as e:
+        logger.error(f"❌ AI question generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate questions: {str(e)}")
     
     # Create quiz
+    logger.info(f"💾 Creating quiz object...")
     quiz_id = str(uuid.uuid4())
     quiz = Quiz(
         id=quiz_id,
@@ -57,44 +159,120 @@ async def generate_quiz(
         created_at=datetime.now()
     )
     
-    # Save to Firestore
+    # Save to Firestore quizzes collection
+    logger.info(f"💾 Saving quiz to Firestore...")
+    logger.debug(f"Quiz ID: {quiz_id}")
+    logger.debug(f"Quiz title: {quiz.title}")
+    logger.debug(f"Quiz book_id: {quiz.book_id}")
+    logger.debug(f"Number of questions: {len(quiz.questions)}")
+    
     db = get_db()
     quiz_dict = quiz.dict()
     quiz_dict['created_at'] = quiz.created_at
     quiz_dict['questions'] = [q.dict() for q in quiz.questions]
     quiz_dict['settings'] = quiz.settings.dict()
     
-    db.collection('quizzes').document(quiz_id).set(quiz_dict)
+    logger.debug(f"Quiz dict keys: {quiz_dict.keys()}")
     
-    return QuizResponse(
-        id=quiz.id,
-        title=quiz.title,
-        description=quiz.description,
-        book_id=quiz.book_id,
-        subject=quiz.subject,
-        question_count=len(quiz.questions),
-        difficulty=quiz.difficulty.value,
-        type=quiz.type.value,
-        created_at=quiz.created_at
-    )
+    try:
+        # Save to quizzes collection
+        quiz_ref = db.collection('quizzes').document(quiz_id)
+        logger.debug(f"Writing to Firestore path: quizzes/{quiz_id}")
+        quiz_ref.set(quiz_dict)
+        
+        # Verify the write
+        verify_doc = quiz_ref.get()
+        if verify_doc.exists:
+            logger.info(f"✅ Quiz saved and verified in quizzes collection: {quiz_id}")
+            logger.debug(f"Saved quiz has {len(verify_doc.to_dict().get('questions', []))} questions")
+        else:
+            logger.error(f"❌ Quiz document not found after save attempt!")
+            
+    except Exception as e:
+        logger.error(f"❌ Failed to save quiz: {str(e)}")
+        logger.exception("Full exception trace:")
+        raise HTTPException(status_code=500, detail=f"Failed to save quiz: {str(e)}")
+    
+    # Also save to user's quiz collection
+    logger.info(f"👤 Saving quiz to user's collection...")
+    try:
+        user_doc = db.collection('users').document(current_user_id).get()
+        if user_doc.exists:
+            user_data = user_doc.to_dict()
+            user_quizzes = user_data.get('user_quizzes', {})
+            
+            # Create user quiz entry
+            user_quiz = UserQuizData(
+                quiz_id=quiz_id,
+                book_id=request.book_id,
+                title=quiz.title,
+                subject=quiz.subject,
+                difficulty=quiz.difficulty,
+                created_at=datetime.now(),
+                attempts=[],
+                best_score=0.0,
+                total_attempts=0
+            )
+            
+            user_quizzes[quiz_id] = user_quiz.dict()
+            db.collection('users').document(current_user_id).update({
+                'user_quizzes': user_quizzes
+            })
+            logger.info(f"✅ Quiz saved to user's collection")
+        else:
+            logger.warning(f"⚠️ User document not found: {current_user_id}")
+    except Exception as e:
+        logger.error(f"❌ Failed to save to user collection: {str(e)}")
+        # Don't fail the whole request if user update fails
+    
+    logger.info(f"🎉 Quiz generation completed successfully: {quiz_id}")
+    logger.info(f"📦 Returning complete quiz with {len(quiz.questions)} questions")
+    return quiz
 
 
 @router.get("/{quiz_id}", response_model=Quiz)
 async def get_quiz(quiz_id: str):
     """Get a specific quiz"""
     try:
+        logger.info(f"📖 Fetching quiz: {quiz_id}")
         db = get_db()
         doc = db.collection('quizzes').document(quiz_id).get()
         
         if not doc.exists:
+            logger.error(f"❌ Quiz not found: {quiz_id}")
             raise HTTPException(status_code=404, detail="Quiz not found")
         
         quiz_data = doc.to_dict()
         quiz_data['id'] = doc.id
         
-        return Quiz(**quiz_data)
+        logger.info(f"✅ Quiz found: {quiz_data.get('title', 'Untitled')}")
+        
+        # Check questions data
+        questions_data = quiz_data.get('questions', [])
+        logger.info(f"📊 Raw Firestore quiz has {len(questions_data)} questions")
+        logger.debug(f"First question keys: {questions_data[0].keys() if questions_data else 'No questions'}")
+        logger.debug(f"Quiz data keys: {quiz_data.keys()}")
+        
+        # Manually reconstruct quiz to ensure all questions are included
+        try:
+            quiz = Quiz(**quiz_data)
+            logger.info(f"✅ Quiz object created with {len(quiz.questions)} questions")
+            
+            if len(quiz.questions) != len(questions_data):
+                logger.error(f"❌ Question count mismatch! Firestore: {len(questions_data)}, Pydantic: {len(quiz.questions)}")
+                # Try to find which questions failed
+                for i, q_data in enumerate(questions_data):
+                    logger.debug(f"Question {i}: {q_data.get('id', 'no-id')} - {q_data.get('question_text', 'no-text')[:50]}")
+        except Exception as pydantic_error:
+            logger.error(f"❌ Pydantic validation error: {str(pydantic_error)}")
+            logger.debug(f"Problematic quiz_data: {quiz_data}")
+            raise
+        
+        return quiz
         
     except Exception as e:
+        logger.error(f"❌ Error fetching quiz {quiz_id}: {str(e)}")
+        logger.exception("Full exception trace:")
         raise HTTPException(status_code=500, detail=f"Error fetching quiz: {str(e)}")
 
 
@@ -128,15 +306,15 @@ async def submit_quiz(
             if user_answer:
                 is_correct = False
                 
-                if question.type == "multiple_choice":
+                if question.type == "multipleChoice":
                     # Check if selected option is correct
                     for option in question.options:
                         if option.id in user_answer.selected_options and option.is_correct:
                             is_correct = True
                             break
-                elif question.type == "true_false":
+                elif question.type == "trueFalse":
                     is_correct = user_answer.user_answer == question.correct_answer
-                elif question.type == "short_answer":
+                elif question.type == "shortAnswer":
                     # Simple string comparison - in production, use fuzzy matching
                     is_correct = user_answer.user_answer.lower().strip() == question.correct_answer.lower().strip()
                 

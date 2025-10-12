@@ -27,23 +27,34 @@ class UserBookProgress(BaseModel):
 
 
 class UserPreferences(BaseModel):
+    """User app preferences matching Flutter UI"""
+    language: str = "en"
+    is_dark_mode: bool = False
     font_size: float = 16.0
-    line_height: float = 1.5
-    theme: str = "light"
-    auto_scroll: bool = False
-    night_mode: bool = False
+    ai_tips_enabled: bool = True
+    notifications_enabled: bool = True
+    sound_enabled: bool = True
 
 
 class ReadingPreferences(BaseModel):
-    preferred_subjects: List[str] = []
-    reading_goals: Dict[str, int] = {}  # {"daily_minutes": 30, "weekly_books": 2}
-    difficulty_level: str = "medium"
+    """Reading-specific preferences matching Flutter UI"""
+    line_height: float = 1.5
+    font_family: str = "Inter"
+    auto_scroll: bool = False
+    auto_scroll_speed: int = 200  # words per minute
+    highlight_difficult_words: bool = True
+    show_definitions_on_tap: bool = True
 
 
 class UserProgress(BaseModel):
+    """User progress tracking matching Flutter UI"""
     total_books_read: int = 0
-    total_reading_time: int = 0  # in minutes
-    streak_days: int = 0
+    total_time_spent: int = 0  # in minutes (renamed from total_reading_time)
+    current_streak: int = 0  # consecutive days (renamed from streak_days)
+    longest_streak: int = 0
+    total_quizzes_taken: int = 0
+    average_quiz_score: float = 0.0
+    achieved_badges: List[str] = []
     last_activity: Optional[datetime] = None
     subjects_progress: Dict[str, float] = {}  # subject -> progress percentage
 
@@ -52,6 +63,7 @@ class User(BaseModel):
     id: Optional[str] = None
     email: str
     name: str
+    avatar_url: Optional[str] = None
     password_hash: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: Optional[datetime] = None
@@ -71,12 +83,34 @@ class UserUpdate(BaseModel):
     name: Optional[str] = None
     preferences: Optional[UserPreferences] = None
     reading_preferences: Optional[ReadingPreferences] = None
+    avatar_url: Optional[str] = None
+
+
+class PreferencesUpdate(BaseModel):
+    """Update only user preferences"""
+    language: Optional[str] = None
+    is_dark_mode: Optional[bool] = None
+    font_size: Optional[float] = None
+    ai_tips_enabled: Optional[bool] = None
+    notifications_enabled: Optional[bool] = None
+    sound_enabled: Optional[bool] = None
+
+
+class ReadingPreferencesUpdate(BaseModel):
+    """Update only reading preferences"""
+    line_height: Optional[float] = None
+    font_family: Optional[str] = None
+    auto_scroll: Optional[bool] = None
+    auto_scroll_speed: Optional[int] = None
+    highlight_difficult_words: Optional[bool] = None
+    show_definitions_on_tap: Optional[bool] = None
 
 
 class UserResponse(BaseModel):
     id: str
     email: str
     name: str
+    avatar_url: Optional[str] = None
     created_at: datetime
     preferences: UserPreferences
     reading_preferences: ReadingPreferences

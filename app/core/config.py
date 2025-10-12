@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     
     # App Configuration
     DEBUG: bool = True
+    LOG_LEVEL: str = "DEBUG"
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     
@@ -26,11 +27,6 @@ class Settings(BaseSettings):
     # OpenAI Configuration
     OPENAI_API_KEY: str
     
-    # JWT Configuration
-    JWT_SECRET_KEY: str
-    JWT_ALGORITHM: str = "HS256"
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    
     # File Storage
     MAX_FILE_SIZE: int = 50 * 1024 * 1024  # 50MB
     ALLOWED_FILE_TYPES: list = ["pdf", "epub", "docx"]
@@ -39,6 +35,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = 'ignore'  # Ignore extra fields from .env (like old JWT config)
 
 
 # Global settings instance

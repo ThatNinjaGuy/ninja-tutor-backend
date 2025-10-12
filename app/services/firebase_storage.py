@@ -49,6 +49,21 @@ class FirebaseStorageService:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error uploading cover: {str(e)}")
     
+    async def upload_avatar(self, file_path: str, user_id: str) -> str:
+        """Upload user avatar image"""
+        try:
+            file_extension = os.path.splitext(file_path)[1]
+            storage_path = f"avatars/{user_id}{file_extension}"
+            
+            blob = self.bucket.blob(storage_path)
+            blob.upload_from_filename(file_path)
+            blob.make_public()
+            
+            return blob.public_url
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error uploading avatar: {str(e)}")
+    
     async def delete_file_by_url(self, file_url: str) -> bool:
         """Delete file from storage using its public URL"""
         try:

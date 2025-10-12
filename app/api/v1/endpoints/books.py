@@ -5,7 +5,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 
-from ....models.book import BookUpload, BookResponse, Book
+from ....models.book import BookUpload, BookResponse, BookCardResponse, Book
 from ....services.book_service import BookService
 
 router = APIRouter()
@@ -64,22 +64,22 @@ async def upload_book(
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 
-@router.get("", response_model=List[BookResponse])
+@router.get("", response_model=List[BookCardResponse])
 async def get_books(
     limit: int = 20,
     offset: int = 0,
     subject: Optional[str] = None,
     grade: Optional[str] = None
 ):
-    """Get list of books with optional filtering"""
+    """Get list of books with optional filtering - optimized for card display"""
     book_service = BookService()
     books = await book_service.get_books(limit=limit, offset=offset, subject=subject, grade=grade)
     return books
 
 
-@router.get("/search", response_model=List[BookResponse])
+@router.get("/search", response_model=List[BookCardResponse])
 async def search_books(q: str, limit: int = 20):
-    """Search books by title, author, or subject"""
+    """Search books by title, author, or subject - optimized for card display"""
     book_service = BookService()
     books = await book_service.search_books(q, limit=limit)
     return books

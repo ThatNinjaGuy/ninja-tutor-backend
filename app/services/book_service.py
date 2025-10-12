@@ -8,7 +8,7 @@ from datetime import datetime
 from fastapi import UploadFile, HTTPException
 
 from ..core.firebase_config import get_db, get_storage, initialize_firebase
-from ..models.book import Book, BookUpload, BookResponse, BookMetadata, BookType
+from ..models.book import Book, BookUpload, BookResponse, BookCardResponse, BookMetadata, BookType
 from .file_processor import FileProcessor
 from .firebase_storage import FirebaseStorageService
 
@@ -87,8 +87,8 @@ class BookService:
             raise HTTPException(status_code=500, detail=f"Error uploading book: {str(e)}")
     
     async def get_books(self, limit: int = 20, offset: int = 0, 
-                       subject: Optional[str] = None, grade: Optional[str] = None) -> List[BookResponse]:
-        """Get list of books with optional filtering"""
+                       subject: Optional[str] = None, grade: Optional[str] = None) -> List[BookCardResponse]:
+        """Get list of books with optional filtering - optimized for card display"""
         try:
             query = self.db.collection('books')
             
@@ -106,22 +106,20 @@ class BookService:
             
             for doc in docs:
                 book_data = doc.to_dict()
-                book_response = BookResponse(
+                # Return only essential fields for card display
+                book_card = BookCardResponse(
                     id=doc.id,
                     title=book_data.get('title', ''),
                     author=book_data.get('author', ''),
-                    description=book_data.get('description'),
-                    cover_url=book_data.get('cover_url'),
                     subject=book_data.get('subject', ''),
                     grade=book_data.get('grade', ''),
-                    type=book_data.get('type', 'other'),
-                    file_url=book_data.get('file_url'),
+                    cover_url=book_data.get('cover_url'),
                     total_pages=book_data.get('total_pages', 0),
-                    estimated_reading_time=book_data.get('estimated_reading_time'),
-                    added_at=book_data.get('added_at', datetime.now()),
-                    tags=book_data.get('tags', [])
+                    progress_percentage=0.0,  # No progress for global book list
+                    last_read_at=book_data.get('last_read_at'),
+                    added_at=book_data.get('added_at', datetime.now())
                 )
-                books.append(book_response)
+                books.append(book_card)
             
             return books
             
@@ -144,8 +142,8 @@ class BookService:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error fetching book: {str(e)}")
     
-    async def search_books(self, query: str, limit: int = 20) -> List[BookResponse]:
-        """Search books by title, author, or subject"""
+    async def search_books(self, query: str, limit: int = 20) -> List[BookCardResponse]:
+        """Search books by title, author, or subject - optimized for card display"""
         try:
             # Note: Firestore doesn't support full-text search natively
             # This is a simple implementation that searches in title and author fields
@@ -159,22 +157,20 @@ class BookService:
             
             for doc in title_docs:
                 book_data = doc.to_dict()
-                book_response = BookResponse(
+                # Return only essential fields for card display
+                book_card = BookCardResponse(
                     id=doc.id,
                     title=book_data.get('title', ''),
                     author=book_data.get('author', ''),
-                    description=book_data.get('description'),
-                    cover_url=book_data.get('cover_url'),
                     subject=book_data.get('subject', ''),
                     grade=book_data.get('grade', ''),
-                    type=book_data.get('type', 'other'),
-                    file_url=book_data.get('file_url'),
+                    cover_url=book_data.get('cover_url'),
                     total_pages=book_data.get('total_pages', 0),
-                    estimated_reading_time=book_data.get('estimated_reading_time'),
-                    added_at=book_data.get('added_at', datetime.now()),
-                    tags=book_data.get('tags', [])
+                    progress_percentage=0.0,
+                    last_read_at=book_data.get('last_read_at'),
+                    added_at=book_data.get('added_at', datetime.now())
                 )
-                books.append(book_response)
+                books.append(book_card)
             
             return books
             

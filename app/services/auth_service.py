@@ -5,8 +5,8 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 from passlib.context import CryptContext
-from jose import JWTError, jwt
 from fastapi import HTTPException, status
+from firebase_admin import auth as firebase_auth
 
 from ..core.config import settings
 from ..core.firebase_config import get_db
@@ -28,21 +28,13 @@ class AuthService:
         """Generate password hash"""
         return self.pwd_context.hash(password)
     
-    def create_access_token(self, data: dict) -> str:
-        """Create JWT access token"""
-        to_encode = data.copy()
-        expire = datetime.utcnow() + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
-        to_encode.update({"exp": expire})
-        
-        encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
-        return encoded_jwt
-    
-    def verify_token(self, token: str) -> Optional[dict]:
-        """Verify and decode JWT token"""
+    def verify_firebase_token(self, id_token: str) -> Optional[dict]:
+        """Verify Firebase ID token"""
         try:
-            payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
-            return payload
-        except JWTError:
+            decoded_token = firebase_auth.verify_id_token(id_token)
+            return decoded_token
+        except Exception as e:
+            print(f"Error verifying Firebase token: {e}")
             return None
     
     async def create_user(self, user_data: UserCreate) -> User:
@@ -173,20 +165,44 @@ class AuthService:
                 detail=f"Error updating user: {str(e)}"
             )
     
-    async def login(self, email: str, password: str) -> Token:
-        """User login"""
-        user = await self.authenticate_user(email, password)
-        if not user:
+    async def sync_firebase_user(self, firebase_uid: str, email: str, name: str) -> User:
+        """Sync Firebase user with Firestore user document"""
+        try:
+            # Check if user exists in Firestore by firebase_uid
+            user_doc = self.db.collection('users').document(firebase_uid).get()
+            
+            if user_doc.exists:
+                # User exists, return it
+                user_data = user_doc.to_dict()
+                user_data['id'] = user_doc.id
+                return User(**user_data)
+            else:
+                # Create new user document with Firebase UID
+                user = User(
+                    id=firebase_uid,  # Use Firebase UID as user ID
+                    email=email,
+                    name=name,
+                    created_at=datetime.now()
+                )
+                
+                # Save to Firestore
+                user_dict = user.dict()
+                user_dict['created_at'] = user.created_at
+                user_dict['preferences'] = user.preferences.dict()
+                user_dict['reading_preferences'] = user.reading_preferences.dict()
+                user_dict['progress'] = user.progress.dict()
+                # Don't save password_hash for Firebase users
+                user_dict.pop('password_hash', None)
+                # Initialize empty collections for user data
+                user_dict['library_books'] = {}
+                user_dict['user_quizzes'] = {}
+                
+                self.db.collection('users').document(firebase_uid).set(user_dict)
+                
+                return user
+                
+        except Exception as e:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect email or password",
-                headers={"WWW-Authenticate": "Bearer"},
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error syncing Firebase user: {str(e)}"
             )
-        
-        access_token = self.create_access_token(data={"sub": user.id, "email": user.email})
-        
-        return Token(
-            access_token=access_token,
-            token_type="bearer",
-            expires_in=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60
-        )

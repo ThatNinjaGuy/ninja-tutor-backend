@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Depends
 import uuid
 from datetime import datetime
 
-from ....models.note import Note, NoteCreate, NoteUpdate, NoteResponse
+from ....models.note import Note, NoteCreate, NoteUpdate, NoteResponse, NoteCardResponse
 from ....services.ai_service import AIService
 from ....core.firebase_config import get_db
 from .auth import get_current_user
@@ -67,7 +67,7 @@ async def create_note(
             id=note.id,
             book_id=note.book_id,
             user_id=note.user_id,
-            type=note.type.value,
+            type=note.type,
             content=note.content,
             title=note.title,
             position=note.position,
@@ -75,7 +75,8 @@ async def create_note(
             ai_insights=note.ai_insights,
             created_at=note.created_at,
             updated_at=note.updated_at,
-            is_shared=note.is_shared
+            is_shared=note.is_shared,
+            is_favorite=note.is_favorite
         )
         
     except Exception as e:
@@ -110,7 +111,8 @@ async def get_notes_for_book(
                 ai_insights=note_data.get('ai_insights'),
                 created_at=note_data.get('created_at'),
                 updated_at=note_data.get('updated_at'),
-                is_shared=note_data.get('is_shared', False)
+                is_shared=note_data.get('is_shared', False),
+                is_favorite=note_data.get('is_favorite', False)
             )
             notes.append(note_response)
         
@@ -269,7 +271,8 @@ async def get_shared_notes(book_id: str):
                 ai_insights=note_data.get('ai_insights'),
                 created_at=note_data.get('created_at'),
                 updated_at=note_data.get('updated_at'),
-                is_shared=note_data.get('is_shared', False)
+                is_shared=note_data.get('is_shared', False),
+                is_favorite=note_data.get('is_favorite', False)
             )
             notes.append(note_response)
         
@@ -320,3 +323,122 @@ async def sync_notes(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error syncing notes: {str(e)}")
+
+
+@router.get("/all", response_model=List[NoteCardResponse])
+async def get_all_user_notes(
+    current_user_id: str = Depends(get_current_user)
+):
+    """Get all notes for current user across all books - optimized for card display"""
+    try:
+        db = get_db()
+        
+        # Get all notes for this user
+        query = db.collection('notes').where('user_id', '==', current_user_id)
+        docs = query.stream()
+        
+        notes = []
+        for doc in docs:
+            note_data = doc.to_dict()
+            
+            # Return lightweight card response
+            note_card = NoteCardResponse(
+                id=doc.id,
+                book_id=note_data.get('book_id'),
+                type=note_data.get('type'),
+                content=note_data.get('content'),
+                title=note_data.get('title'),
+                page_number=note_data.get('position', {}).get('page', 0),
+                tags=note_data.get('tags', []),
+                is_favorite=note_data.get('is_favorite', False),
+                created_at=note_data.get('created_at', datetime.now())
+            )
+            notes.append(note_card)
+        
+        # Sort by created_at (newest first)
+        notes.sort(key=lambda x: x.created_at, reverse=True)
+        
+        return notes
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching all notes: {str(e)}")
+
+
+@router.get("/favorites", response_model=List[NoteCardResponse])
+async def get_favorite_notes(
+    current_user_id: str = Depends(get_current_user)
+):
+    """Get all favorite notes for current user"""
+    try:
+        db = get_db()
+        
+        # Get favorite notes for this user
+        query = db.collection('notes').where('user_id', '==', current_user_id).where('is_favorite', '==', True)
+        docs = query.stream()
+        
+        notes = []
+        for doc in docs:
+            note_data = doc.to_dict()
+            
+            note_card = NoteCardResponse(
+                id=doc.id,
+                book_id=note_data.get('book_id'),
+                type=note_data.get('type'),
+                content=note_data.get('content'),
+                title=note_data.get('title'),
+                page_number=note_data.get('position', {}).get('page', 0),
+                tags=note_data.get('tags', []),
+                is_favorite=note_data.get('is_favorite', False),
+                created_at=note_data.get('created_at', datetime.now())
+            )
+            notes.append(note_card)
+        
+        # Sort by created_at (newest first)
+        notes.sort(key=lambda x: x.created_at, reverse=True)
+        
+        return notes
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching favorite notes: {str(e)}")
+
+
+@router.put("/{note_id}/favorite")
+async def toggle_favorite(
+    note_id: str,
+    current_user_id: str = Depends(get_current_user)
+):
+    """Toggle favorite status of a note"""
+    try:
+        db = get_db()
+        
+        # Get note document
+        note_doc = db.collection('notes').document(note_id).get()
+        if not note_doc.exists:
+            raise HTTPException(status_code=404, detail="Note not found")
+        
+        note_data = note_doc.to_dict()
+        
+        # Verify ownership
+        if note_data.get('user_id') != current_user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to modify this note")
+        
+        # Toggle favorite status
+        current_favorite = note_data.get('is_favorite', False)
+        new_favorite = not current_favorite
+        
+        # Update note
+        db.collection('notes').document(note_id).update({
+            'is_favorite': new_favorite,
+            'updated_at': datetime.now()
+        })
+        
+        return {
+            "message": "Favorite status updated",
+            "note_id": note_id,
+            "is_favorite": new_favorite
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error toggling favorite: {str(e)}")

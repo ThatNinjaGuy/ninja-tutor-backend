@@ -8,7 +8,7 @@ from pydantic import BaseModel
 import uuid
 from datetime import datetime
 
-from ....models.book import BookResponse
+from ....models.book import BookResponse, BookCardResponse
 from ....models.user import UserBookProgress, ReadingStatus
 from ....services.book_service import BookService
 from ....core.firebase_config import get_db
@@ -33,6 +33,22 @@ class UserBookResponse(BaseModel):
     book_id: str
     book: BookResponse
     progress: UserBookProgress
+    added_at: datetime
+
+
+class UserBookCardResponse(BaseModel):
+    """Lightweight response for user library book cards"""
+    book_id: str
+    title: str
+    author: str
+    subject: str
+    grade: str
+    cover_url: Optional[str]
+    total_pages: int
+    current_page: int
+    progress_percentage: float
+    reading_status: str
+    last_read_at: Optional[datetime]
     added_at: datetime
 
 
@@ -183,7 +199,7 @@ async def get_user_library(
             if status and progress.reading_status != status:
                 continue
             
-            # Convert book to BookResponse
+            # Create optimized BookResponse with only essential fields + progress_percentage
             book_response = BookResponse(
                 id=book.id,
                 title=book.title,
@@ -197,7 +213,8 @@ async def get_user_library(
                 total_pages=book.total_pages,
                 estimated_reading_time=book.estimated_reading_time,
                 added_at=book.added_at,
-                tags=book.tags
+                tags=book.tags,
+                progress_percentage=progress.progress_percentage
             )
             
             user_library.append(UserBookResponse(
@@ -264,7 +281,7 @@ async def update_reading_progress(
         
         # Update other fields if provided
         if request.reading_status:
-            progress_data['reading_status'] = request.reading_status.value
+            progress_data['reading_status'] = request.reading_status.value if hasattr(request.reading_status, 'value') else str(request.reading_status)
             
             if request.reading_status == ReadingStatus.IN_PROGRESS and not progress_data.get('started_at'):
                 progress_data['started_at'] = datetime.now()

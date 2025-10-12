@@ -3,6 +3,7 @@ Ninja Tutor Backend API
 FastAPI application with Firebase integration
 """
 import os
+import logging
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -13,23 +14,34 @@ from app.core.config import settings
 from app.core.firebase_config import initialize_firebase
 from app.api.v1.router import api_router
 
+# Configure logging
+logging.basicConfig(
+    level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan management"""
     # Startup
-    print("🚀 Starting Ninja Tutor Backend...")
+    logger.info("🚀 Starting Ninja Tutor Backend...")
+    logger.debug(f"Debug mode: {settings.DEBUG}")
+    logger.debug(f"Log level: {settings.LOG_LEVEL}")
+    
     initialize_firebase()
-    print("✅ Firebase initialized")
+    logger.info("✅ Firebase initialized")
     
     # Create upload directory
     os.makedirs("uploads", exist_ok=True)
-    print("✅ Upload directory ready")
+    logger.info("✅ Upload directory ready")
     
     yield
     
     # Shutdown
-    print("🛑 Shutting down Ninja Tutor Backend...")
+    logger.info("🛑 Shutting down Ninja Tutor Backend...")
 
 
 # Create FastAPI app
@@ -79,5 +91,7 @@ if __name__ == "__main__":
         host=settings.HOST,
         port=settings.PORT,
         reload=settings.DEBUG,
-        log_level="info"
+        log_level=settings.LOG_LEVEL.lower(),
+        access_log=True,
+        log_config=None  # Use our custom logging config
     )

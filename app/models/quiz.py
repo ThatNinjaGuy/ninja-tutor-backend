@@ -8,23 +8,33 @@ from enum import Enum
 
 
 class QuestionType(str, Enum):
-    multiple_choice = "multiple_choice"
-    true_false = "true_false"
-    short_answer = "short_answer"
+    multiple_choice = "multipleChoice"
+    multiple_select = "multipleSelect"
+    true_false = "trueFalse"
+    short_answer = "shortAnswer"
     essay = "essay"
-    fill_blank = "fill_blank"
+    fill_blank = "fillInTheBlank"
+    matching = "matching"
+    ordering = "ordering"
+    audio = "audio"
+    video = "video"
 
 
 class QuizType(str, Enum):
     practice = "practice"
     assessment = "assessment"
     review = "review"
+    adaptive = "adaptive"
+    timed = "timed"
+    final_ = "final_"
 
 
 class DifficultyLevel(str, Enum):
+    beginner = "beginner"
     easy = "easy"
     medium = "medium"
     hard = "hard"
+    expert = "expert"
 
 
 class AnswerOption(BaseModel):
@@ -115,3 +125,58 @@ class QuizResponse(BaseModel):
     difficulty: str
     type: str
     created_at: datetime
+
+
+class QuizAttempt(BaseModel):
+    """Single quiz attempt by a user"""
+    attempt_number: int
+    score: float
+    percentage: float
+    completed_at: datetime
+    time_taken: int  # in minutes
+    answers: Dict[str, Any]  # question_id -> user answer
+    is_passed: bool = False
+
+
+class UserQuizData(BaseModel):
+    """Quiz data stored in user document"""
+    quiz_id: str
+    book_id: str
+    title: str
+    subject: str
+    difficulty: str
+    created_at: datetime
+    attempts: List[QuizAttempt] = []
+    best_score: float = 0.0
+    total_attempts: int = 0
+
+
+class UserQuizResponse(BaseModel):
+    """Lightweight response for user quiz cards"""
+    quiz_id: str
+    book_id: str
+    book_title: str
+    title: str
+    subject: str
+    difficulty: str
+    question_count: int
+    total_attempts: int
+    best_score: float
+    last_attempt_date: Optional[datetime]
+    created_at: datetime
+
+
+class QuizResultResponse(BaseModel):
+    """Response for quiz results"""
+    id: str
+    quiz_id: str
+    user_id: str
+    total_score: float
+    max_score: int
+    percentage: float
+    correct_answers: int
+    incorrect_answers: int
+    time_taken: int
+    is_passed: bool
+    completed_at: datetime
+    attempt_number: int

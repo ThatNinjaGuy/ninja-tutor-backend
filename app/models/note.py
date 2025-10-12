@@ -8,9 +8,12 @@ from enum import Enum
 
 
 class NoteType(str, Enum):
+    """Note types matching Flutter UI exactly"""
     highlight = "highlight"
-    annotation = "annotation"
+    text = "text"  # Renamed from annotation to match UI
+    drawing = "drawing"
     bookmark = "bookmark"
+    question = "question"
     summary = "summary"
 
 
@@ -49,6 +52,7 @@ class Note(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: Optional[datetime] = None
     is_shared: bool = False
+    is_favorite: bool = False  # Added to match Flutter UI
 
     class Config:
         use_enum_values = True
@@ -69,6 +73,7 @@ class NoteUpdate(BaseModel):
     title: Optional[str] = None
     tags: Optional[List[str]] = None
     is_shared: Optional[bool] = None
+    is_favorite: Optional[bool] = None
 
 
 class NoteResponse(BaseModel):
@@ -84,3 +89,17 @@ class NoteResponse(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime]
     is_shared: bool
+    is_favorite: bool = False
+
+
+class NoteCardResponse(BaseModel):
+    """Lightweight response for note cards"""
+    id: str
+    book_id: str
+    type: str
+    content: str
+    title: Optional[str]
+    page_number: int
+    tags: List[str]
+    is_favorite: bool
+    created_at: datetime
