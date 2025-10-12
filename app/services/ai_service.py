@@ -105,7 +105,7 @@ class AIService:
             prompt = f"""
             Generate {question_count} educational questions based on this content:
             
-            {content[:2000]}...
+            {content}...
             
             Requirements:
             - Difficulty level: {difficulty.value}

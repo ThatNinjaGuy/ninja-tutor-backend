@@ -15,6 +15,9 @@ from ....models.quiz import (
 from ....services.book_service import BookService
 from ....core.firebase_config import get_db
 from .auth import get_current_user
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -29,10 +32,21 @@ class SaveQuizRequest(BaseModel):
     question_count: int
 
 
+class AnswerSubmission(BaseModel):
+    """Individual answer submission"""
+    question_id: str
+    selected_options: List[str] = []
+    user_answer: str = ""
+    is_correct: bool
+    points_earned: int
+    max_points: int
+    time_spent: int = 0
+
+
 class SubmitAttemptRequest(BaseModel):
     """Request to submit a quiz attempt"""
     quiz_id: str
-    answers: List[QuestionResult]
+    answers: List[AnswerSubmission]
     time_taken: int  # in minutes
 
 
@@ -168,25 +182,62 @@ async def submit_quiz_attempt(
 ):
     """Submit a quiz attempt and save results"""
     try:
+        logger.info(f"📝 Submitting quiz attempt: quiz_id={request.quiz_id}, user={current_user_id}")
+        logger.info(f"📊 Answers received: {len(request.answers)} questions, time={request.time_taken}min")
+        
         db = get_db()
         
         # Get user document
         user_doc = db.collection('users').document(current_user_id).get()
         if not user_doc.exists:
+            logger.error(f"❌ User not found: {current_user_id}")
             raise HTTPException(status_code=404, detail="User not found")
         
         user_data = user_doc.to_dict()
         user_quizzes = user_data.get('user_quizzes', {})
         
-        if request.quiz_id not in user_quizzes:
-            raise HTTPException(status_code=404, detail="Quiz not found in your collection")
+        logger.debug(f"User has {len(user_quizzes)} quizzes in collection")
         
-        quiz_data = user_quizzes[request.quiz_id]
+        # If quiz not in user's collection, fetch it from quizzes collection and add it
+        if request.quiz_id not in user_quizzes:
+            logger.info(f"📥 Quiz {request.quiz_id} not in user's collection, fetching from quizzes collection...")
+            
+            # Fetch quiz from main quizzes collection
+            quiz_doc = db.collection('quizzes').document(request.quiz_id).get()
+            if not quiz_doc.exists:
+                logger.error(f"❌ Quiz {request.quiz_id} not found in quizzes collection")
+                raise HTTPException(status_code=404, detail="Quiz not found")
+            
+            quiz_firestore_data = quiz_doc.to_dict()
+            
+            # Get book info for the quiz
+            book_service = BookService()
+            book = await book_service.get_book(quiz_firestore_data.get('book_id'))
+            
+            # Create new user quiz entry
+            quiz_data = {
+                'quiz_id': request.quiz_id,
+                'book_id': quiz_firestore_data.get('book_id', ''),
+                'title': quiz_firestore_data.get('title', 'Untitled Quiz'),
+                'subject': quiz_firestore_data.get('subject', 'General'),
+                'difficulty': quiz_firestore_data.get('difficulty', 'medium'),
+                'created_at': quiz_firestore_data.get('created_at', datetime.now()),
+                'attempts': [],
+                'best_score': 0.0,
+                'total_attempts': 0
+            }
+            user_quizzes[request.quiz_id] = quiz_data
+            logger.info(f"✅ Created new quiz entry in user's collection: {quiz_data.get('title')}")
+        else:
+            quiz_data = user_quizzes[request.quiz_id]
+            logger.info(f"✅ Found existing quiz in user's collection: {quiz_data.get('title', 'Untitled')}")
         
         # Calculate score
         total_score = sum(result.points_earned for result in request.answers)
         max_score = sum(result.max_points for result in request.answers)
         percentage = (total_score / max_score * 100) if max_score > 0 else 0
+        
+        logger.info(f"📈 Score calculated: {total_score}/{max_score} = {percentage:.1f}%")
         
         # Determine if passed (70% threshold)
         is_passed = percentage >= 70.0
@@ -203,6 +254,8 @@ async def submit_quiz_attempt(
             is_passed=is_passed
         )
         
+        logger.info(f"✨ Created attempt #{attempt_number}: score={percentage:.1f}%, passed={is_passed}")
+        
         # Update quiz data
         attempts = quiz_data.get('attempts', [])
         attempts.append(attempt.dict())
@@ -210,11 +263,16 @@ async def submit_quiz_attempt(
         quiz_data['total_attempts'] = attempt_number
         quiz_data['best_score'] = max(quiz_data.get('best_score', 0.0), percentage)
         
+        logger.info(f"📝 Updating quiz: {len(attempts)} total attempts, best score: {quiz_data['best_score']:.1f}%")
+        
         # Save back to user document
         user_quizzes[request.quiz_id] = quiz_data
         db.collection('users').document(current_user_id).update({
             'user_quizzes': user_quizzes
         })
+        
+        logger.info(f"✅ Quiz attempt saved successfully to user document")
+        logger.debug(f"Attempts array now has {len(attempts)} entries")
         
         # Return result
         return QuizResultResponse(
@@ -244,26 +302,32 @@ async def get_quiz_results(
     quiz_id: Optional[str] = None
 ):
     """Get quiz results/attempts for current user"""
+    logger.info(f"Getting quiz results for user {current_user_id}, quiz_id filter: {quiz_id}")
     try:
         db = get_db()
         
         # Get user document
         user_doc = db.collection('users').document(current_user_id).get()
         if not user_doc.exists:
+            logger.warning(f"User {current_user_id} not found")
             raise HTTPException(status_code=404, detail="User not found")
         
         user_data = user_doc.to_dict()
         user_quizzes = user_data.get('user_quizzes', {})
+        logger.debug(f"Found {len(user_quizzes)} quizzes for user")
         
         results = []
         
         for qid, quiz_data in user_quizzes.items():
             # Filter by quiz_id if provided
             if quiz_id and qid != quiz_id:
+                logger.debug(f"Skipping quiz {qid} - does not match filter {quiz_id}")
                 continue
             
+            logger.debug(f"Processing quiz {qid} with data: {quiz_data}")
             # Get all attempts for this quiz
             attempts = quiz_data.get('attempts', [])
+            logger.debug(f"Processing {len(attempts)} attempts for quiz {qid}")
             
             for idx, attempt in enumerate(attempts):
                 # Calculate correct/incorrect from answers
@@ -272,10 +336,29 @@ async def get_quiz_results(
                 total = len(answers_dict)
                 incorrect = total - correct
                 
+                logger.debug(f"Quiz {qid} attempt {idx+1}: {correct}/{total} correct")
+                
+                # Build question_results array from answers dict
+                question_results = []
+                for question_id, answer_data in answers_dict.items():
+                    question_result = {
+                        'question_id': question_id,
+                        'user_answers': answer_data.get('selected_options', []),
+                        'is_correct': answer_data.get('is_correct', False),
+                        'points_earned': answer_data.get('points_earned', 0),
+                        'max_points': answer_data.get('max_points', 1),
+                        'time_spent': answer_data.get('time_spent', 0),
+                        'hints_used': 0  # Default value
+                    }
+                    question_results.append(question_result)
+                
+                logger.debug(f"Built {len(question_results)} question results for attempt {idx+1}")
+                
                 result = QuizResultResponse(
                     id=str(uuid.uuid4()),
                     quiz_id=qid,
                     user_id=current_user_id,
+                    question_results=question_results,
                     total_score=attempt.get('score', 0),
                     max_score=total,  # Simplified, could be calculated from answers
                     percentage=attempt.get('percentage', 0),
@@ -290,13 +373,75 @@ async def get_quiz_results(
         
         # Sort by completed_at (most recent first)
         results.sort(key=lambda x: x.completed_at, reverse=True)
+        logger.info(f"Returning {len(results)} quiz results")
         
         return results
         
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error fetching quiz results: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching quiz results: {str(e)}")
+
+
+@router.get("/attempt/{quiz_id}/{attempt_number}")
+async def get_attempt_detail(
+    quiz_id: str,
+    attempt_number: int,
+    current_user_id: str = Depends(get_current_user)
+):
+    """Get detailed information about a specific quiz attempt"""
+    logger.info(f"Getting attempt #{attempt_number} for quiz {quiz_id}, user {current_user_id}")
+    try:
+        db = get_db()
+        
+        # Get user document
+        user_doc = db.collection('users').document(current_user_id).get()
+        if not user_doc.exists:
+            logger.warning(f"User {current_user_id} not found")
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_data = user_doc.to_dict()
+        user_quizzes = user_data.get('user_quizzes', {})
+        
+        # Check if quiz exists in user's collection
+        if quiz_id not in user_quizzes:
+            logger.error(f"Quiz {quiz_id} not found in user's collection")
+            raise HTTPException(status_code=404, detail="Quiz not found in your collection")
+        
+        quiz_data = user_quizzes[quiz_id]
+        attempts = quiz_data.get('attempts', [])
+        
+        # Find the specific attempt
+        attempt = None
+        for att in attempts:
+            if att.get('attempt_number') == attempt_number:
+                attempt = att
+                break
+        
+        if not attempt:
+            logger.error(f"Attempt #{attempt_number} not found for quiz {quiz_id}")
+            raise HTTPException(status_code=404, detail=f"Attempt #{attempt_number} not found")
+        
+        logger.info(f"✅ Found attempt #{attempt_number} with {len(attempt.get('answers', {}))} answers")
+        
+        # Return the attempt data
+        return {
+            'quiz_id': quiz_id,
+            'attempt_number': attempt.get('attempt_number'),
+            'score': attempt.get('score'),
+            'percentage': attempt.get('percentage'),
+            'is_passed': attempt.get('is_passed'),
+            'time_taken': attempt.get('time_taken'),
+            'completed_at': attempt.get('completed_at'),
+            'answers': attempt.get('answers', {})  # Full answers dict with selected_options
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching attempt detail: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching attempt detail: {str(e)}")
 
 
 @router.delete("/{quiz_id}")
