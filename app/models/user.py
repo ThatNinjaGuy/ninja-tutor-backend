@@ -24,6 +24,7 @@ class UserBookProgress(BaseModel):
     completed_at: Optional[datetime] = None
     reading_time_minutes: int = 0
     notes: str = ""
+    pages_read_count: int = 0  # Number of pages with 60+ seconds reading time
 
 
 class UserPreferences(BaseModel):

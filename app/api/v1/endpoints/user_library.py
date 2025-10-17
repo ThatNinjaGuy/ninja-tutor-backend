@@ -184,6 +184,17 @@ async def get_user_library(
             
             # Parse progress data
             progress_data = book_data.get('progress', {})
+            
+            # Calculate pages_read_count and reading_time_minutes from page_times
+            page_times = progress_data.get('page_times', {})
+            pages_read_count = sum(1 for time in page_times.values() if time >= 60)
+            total_seconds = sum(page_times.values())
+            reading_time_minutes = int(total_seconds / 60)
+            
+            # Debug logging
+            if page_times:
+                print(f"📊 Book {book_id[:8]}... - Pages with 60+ sec: {pages_read_count}/{len(page_times)}, Total time: {reading_time_minutes} min")
+            
             progress = UserBookProgress(
                 current_page=progress_data.get('current_page', 0),
                 total_pages=progress_data.get('total_pages', book.total_pages),
@@ -192,8 +203,9 @@ async def get_user_library(
                 last_read_at=progress_data.get('last_read_at'),
                 started_at=progress_data.get('started_at'),
                 completed_at=progress_data.get('completed_at'),
-                reading_time_minutes=progress_data.get('reading_time_minutes', 0),
-                notes=progress_data.get('notes', "")
+                reading_time_minutes=reading_time_minutes,
+                notes=progress_data.get('notes', ""),
+                pages_read_count=pages_read_count
             )
             
             # Filter by status if provided
