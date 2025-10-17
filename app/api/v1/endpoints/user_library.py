@@ -2,7 +2,7 @@
 User Library Management endpoints
 Handles adding/removing books to user's personal library and tracking reading progress
 """
-from typing import List, Optional
+from typing import List, Optional, Dict
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 import uuid
@@ -27,6 +27,7 @@ class UpdateProgressRequest(BaseModel):
     total_pages: Optional[int] = None
     reading_status: Optional[ReadingStatus] = None
     notes: Optional[str] = None
+    page_times: Optional[Dict[str, int]] = None  # Dict of page_number: seconds_spent
 
 
 class UserBookResponse(BaseModel):
@@ -259,21 +260,41 @@ async def update_reading_progress(
         book_data = user_books[request.book_id]
         progress_data = book_data.get('progress', {})
         
+        # Initialize page_times if it doesn't exist
+        if 'page_times' not in progress_data:
+            progress_data['page_times'] = {}
+        
         # Update progress fields
         if request.current_page is not None:
             progress_data['current_page'] = request.current_page
             
-            # Calculate progress percentage
+            # Update page times if provided (merge with existing times)
+            if request.page_times is not None:
+                for page_num, time_seconds in request.page_times.items():
+                    current_time = progress_data['page_times'].get(page_num, 0)
+                    progress_data['page_times'][page_num] = current_time + time_seconds
+            
+            # Calculate total pages with significant time (1+ minute = 60 seconds)
             total_pages = request.total_pages or progress_data.get('total_pages', 1)
             progress_data['total_pages'] = total_pages
-            progress_data['progress_percentage'] = min(request.current_page / total_pages, 1.0)
+            
+            pages_read = sum(1 for time in progress_data['page_times'].values() if time >= 60)
+            progress_data['pages_read_count'] = pages_read
+            
+            # Calculate total reading time in minutes
+            total_seconds = sum(progress_data['page_times'].values())
+            progress_data['reading_time_minutes'] = int(total_seconds / 60)
+            
+            # Progress percentage is calculated based on pages with 1+ minute
+            progress_data['progress_percentage'] = min(pages_read / total_pages, 1.0) if total_pages > 0 else 0.0
             
             # Auto-update reading status based on progress
-            if request.current_page == 0:
+            if pages_read == 0:
                 progress_data['reading_status'] = ReadingStatus.NOT_STARTED.value
-            elif request.current_page >= total_pages:
+            elif pages_read >= total_pages:
                 progress_data['reading_status'] = ReadingStatus.COMPLETED.value
-                progress_data['completed_at'] = datetime.now()
+                if not progress_data.get('completed_at'):
+                    progress_data['completed_at'] = datetime.now()
             else:
                 if progress_data.get('reading_status') == ReadingStatus.NOT_STARTED.value:
                     progress_data['reading_status'] = ReadingStatus.IN_PROGRESS.value

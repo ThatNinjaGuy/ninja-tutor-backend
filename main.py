@@ -76,6 +76,12 @@ app.add_middleware(
 # Static files for uploaded content
 app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
 
+# Static files for PDF.js viewer
+pdfjs_dir = os.path.join(os.path.dirname(__file__), "pdfjs")
+if os.path.exists(pdfjs_dir):
+    app.mount("/pdfjs", StaticFiles(directory=pdfjs_dir, html=True), name="pdfjs")
+    logger.info("✅ PDF.js viewer mounted at /pdfjs")
+
 # API routes
 app.include_router(api_router, prefix="/api/v1")
 
