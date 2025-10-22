@@ -442,3 +442,97 @@ async def toggle_favorite(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error toggling favorite: {str(e)}")
+
+
+@router.get("/book/{book_id}/bookmarks", response_model=List[NoteResponse])
+async def get_bookmarks_for_book(
+    book_id: str,
+    current_user_id: str = Depends(get_current_user)
+):
+    """Get all bookmarks for a specific book"""
+    try:
+        db = get_db()
+        
+        # Get user's bookmarks for this book
+        query = db.collection('notes')\
+            .where('book_id', '==', book_id)\
+            .where('user_id', '==', current_user_id)\
+            .where('type', '==', 'bookmark')
+        docs = query.stream()
+        
+        bookmarks = []
+        for doc in docs:
+            note_data = doc.to_dict()
+            bookmark_response = NoteResponse(
+                id=doc.id,
+                book_id=note_data.get('book_id'),
+                user_id=note_data.get('user_id'),
+                type=note_data.get('type'),
+                content=note_data.get('content', ''),
+                title=note_data.get('title'),
+                position=note_data.get('position'),
+                tags=note_data.get('tags', []),
+                ai_insights=note_data.get('ai_insights'),
+                created_at=note_data.get('created_at'),
+                updated_at=note_data.get('updated_at'),
+                is_shared=note_data.get('is_shared', False),
+                is_favorite=note_data.get('is_favorite', False)
+            )
+            bookmarks.append(bookmark_response)
+        
+        # Sort by page number (from position)
+        bookmarks.sort(key=lambda x: x.position.page if x.position else 0)
+        
+        return bookmarks
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching bookmarks: {str(e)}")
+
+
+@router.get("/book/{book_id}/page/{page_number}/notes", response_model=List[NoteResponse])
+async def get_notes_for_page(
+    book_id: str,
+    page_number: int,
+    current_user_id: str = Depends(get_current_user)
+):
+    """Get all notes for a specific page in a book"""
+    try:
+        db = get_db()
+        
+        # Get user's notes for this book
+        query = db.collection('notes')\
+            .where('book_id', '==', book_id)\
+            .where('user_id', '==', current_user_id)
+        docs = query.stream()
+        
+        notes = []
+        for doc in docs:
+            note_data = doc.to_dict()
+            position = note_data.get('position')
+            
+            # Filter by page number
+            if position and position.get('page') == page_number:
+                note_response = NoteResponse(
+                    id=doc.id,
+                    book_id=note_data.get('book_id'),
+                    user_id=note_data.get('user_id'),
+                    type=note_data.get('type'),
+                    content=note_data.get('content', ''),
+                    title=note_data.get('title'),
+                    position=note_data.get('position'),
+                    tags=note_data.get('tags', []),
+                    ai_insights=note_data.get('ai_insights'),
+                    created_at=note_data.get('created_at'),
+                    updated_at=note_data.get('updated_at'),
+                    is_shared=note_data.get('is_shared', False),
+                    is_favorite=note_data.get('is_favorite', False)
+                )
+                notes.append(note_response)
+        
+        # Sort by created_at (newest first)
+        notes.sort(key=lambda x: x.created_at, reverse=True)
+        
+        return notes
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching page notes: {str(e)}")
