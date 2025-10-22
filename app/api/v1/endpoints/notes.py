@@ -5,6 +5,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends
 import uuid
 from datetime import datetime
+import sys
 
 from ....models.note import Note, NoteCreate, NoteUpdate, NoteResponse, NoteCardResponse
 from ....services.ai_service import AIService
@@ -22,6 +23,13 @@ async def create_note(
     """Create a new note"""
     try:
         note_id = str(uuid.uuid4())
+        
+        print(f"\n✏️  POST /notes - Creating new note")
+        print(f"👤 User ID: {current_user_id}")
+        print(f"📚 Book ID: {note_data.book_id}")
+        print(f"📝 Type: {note_data.type}")
+        print(f"📄 Page: {note_data.position.page if note_data.position else 'N/A'}")
+        print(f"💬 Content: {note_data.content[:50]}...")
         
         # Generate AI insights if content is substantial
         ai_insights = None
@@ -61,7 +69,9 @@ async def create_note(
         if note_dict['ai_insights']:
             note_dict['ai_insights'] = note.ai_insights.dict()
         
+        print(f"💾 Saving to Firestore collection: notes, document ID: {note_id}")
         db.collection('notes').document(note_id).set(note_dict)
+        print(f"✅ Note saved successfully")
         
         return NoteResponse(
             id=note.id,
@@ -83,27 +93,164 @@ async def create_note(
         raise HTTPException(status_code=500, detail=f"Error creating note: {str(e)}")
 
 
-@router.get("/book/{book_id}", response_model=List[NoteResponse])
-async def get_notes_for_book(
-    book_id: str,
+@router.get("/all")
+async def get_all_user_notes(
     current_user_id: str = Depends(get_current_user)
 ):
-    """Get all notes for a specific book"""
+    """Get all notes for current user across all books (excludes bookmarks)"""
+    sys.stderr.write("\n🌍 ========== GET /notes/all ==========\n")
+    sys.stderr.write(f"👤 User ID: {current_user_id}\n")
+    sys.stderr.write(f"🔍 Starting notes fetch...\n")
+    sys.stderr.flush()
+    
+    try:
+        db = get_db()
+        sys.stderr.write(f"📦 Got database connection\n")
+        sys.stderr.flush()
+        
+        # Get all notes for this user
+        query = db.collection('notes').where('user_id', '==', current_user_id)
+        docs = query.stream()
+        
+        all_docs = list(docs)
+        sys.stderr.write(f"📄 Found {len(all_docs)} total documents in notes collection\n")
+        sys.stderr.flush()
+        
+        notes = []
+        skipped_bookmarks = 0
+        for doc in all_docs:
+            note_data = doc.to_dict()
+            note_type = note_data.get('type')
+            book_id = note_data.get('book_id')
+            
+            sys.stderr.write(f"  📝 Doc ID: {doc.id}, Book: {book_id}, Type: {note_type}, Content: {note_data.get('content', '')[:30]}...\n")
+            sys.stderr.flush()
+            
+            # Skip bookmark-type notes (they should be in bookmarks collection)
+            if note_type == 'bookmark':
+                skipped_bookmarks += 1
+                sys.stderr.write(f"  ⏭️  Skipping bookmark-type note\n")
+                sys.stderr.flush()
+                continue
+            
+            # Return full note response
+            try:
+                note_response = NoteResponse(
+                    id=doc.id,
+                    book_id=book_id or '',
+                    user_id=note_data.get('user_id') or current_user_id,
+                    type=note_type or 'text',
+                    content=note_data.get('content') or '',
+                    title=note_data.get('title'),
+                    position=note_data.get('position'),
+                    tags=note_data.get('tags', []),
+                    ai_insights=note_data.get('ai_insights'),
+                    created_at=note_data.get('created_at', datetime.now()),
+                    updated_at=note_data.get('updated_at'),
+                    is_shared=note_data.get('is_shared', False),
+                    is_favorite=note_data.get('is_favorite', False)
+                )
+                notes.append(note_response)
+            except Exception as note_error:
+                sys.stderr.write(f"  ❌ Error creating NoteResponse for doc {doc.id}: {str(note_error)}\n")
+                sys.stderr.write(f"  📋 Note data: {note_data}\n")
+                sys.stderr.flush()
+                continue
+        
+        # Sort by created_at (newest first)
+        notes.sort(key=lambda x: x.created_at, reverse=True)
+        
+        sys.stderr.write(f"✅ Returning {len(notes)} notes (skipped {skipped_bookmarks} bookmarks)\n")
+        sys.stderr.flush()
+        
+        # Convert to dict for response
+        return [note.dict() for note in notes]
+        
+    except Exception as e:
+        sys.stderr.write(f"❌ Error fetching all notes: {str(e)}\n")
+        sys.stderr.flush()
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        raise HTTPException(status_code=500, detail=f"Error fetching all notes: {str(e)}")
+
+
+@router.get("/favorites", response_model=List[NoteCardResponse])
+async def get_favorite_notes(
+    current_user_id: str = Depends(get_current_user)
+):
+    """Get all favorite notes for current user"""
     try:
         db = get_db()
         
-        # Get user's notes for this book
-        query = db.collection('notes').where('book_id', '==', book_id).where('user_id', '==', current_user_id)
+        # Get favorite notes for this user
+        query = db.collection('notes').where('user_id', '==', current_user_id).where('is_favorite', '==', True)
         docs = query.stream()
         
         notes = []
         for doc in docs:
             note_data = doc.to_dict()
+            
+            note_card = NoteCardResponse(
+                id=doc.id,
+                book_id=note_data.get('book_id'),
+                type=note_data.get('type'),
+                content=note_data.get('content'),
+                title=note_data.get('title'),
+                page_number=note_data.get('position', {}).get('page', 0),
+                tags=note_data.get('tags', []),
+                is_favorite=note_data.get('is_favorite', False),
+                created_at=note_data.get('created_at', datetime.now())
+            )
+            notes.append(note_card)
+        
+        # Sort by created_at (newest first)
+        notes.sort(key=lambda x: x.created_at, reverse=True)
+        
+        return notes
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching favorite notes: {str(e)}")
+
+
+@router.get("/book/{book_id}", response_model=List[NoteResponse])
+async def get_notes_for_book(
+    book_id: str,
+    current_user_id: str = Depends(get_current_user)
+):
+    """Get all notes for a specific book (excludes bookmarks - they're in separate collection)"""
+    try:
+        print(f"\n📚 GET /notes/book/{book_id}")
+        print(f"👤 User ID: {current_user_id}")
+        
+        db = get_db()
+        
+        # Get user's notes for this book, excluding bookmark type
+        query = db.collection('notes').where('book_id', '==', book_id).where('user_id', '==', current_user_id)
+        docs = query.stream()
+        
+        all_docs = list(docs)
+        print(f"📄 Found {len(all_docs)} total documents in notes collection")
+        
+        notes = []
+        skipped_bookmarks = 0
+        for doc in all_docs:
+            note_data = doc.to_dict()
+            note_type = note_data.get('type')
+            
+            print(f"  📝 Doc ID: {doc.id}, Type: {note_type}, Content: {note_data.get('content', '')[:50]}...")
+            
+            # Skip bookmark-type notes (they should be in bookmarks collection)
+            if note_type == 'bookmark':
+                skipped_bookmarks += 1
+                print(f"  ⏭️  Skipping bookmark-type note")
+                continue
+            
             note_response = NoteResponse(
                 id=doc.id,
                 book_id=note_data.get('book_id'),
                 user_id=note_data.get('user_id'),
-                type=note_data.get('type'),
+                type=note_type,
                 content=note_data.get('content'),
                 title=note_data.get('title'),
                 position=note_data.get('position'),
@@ -116,9 +263,11 @@ async def get_notes_for_book(
             )
             notes.append(note_response)
         
+        print(f"✅ Returning {len(notes)} notes (skipped {skipped_bookmarks} bookmarks)")
         return notes
         
     except Exception as e:
+        print(f"❌ Error fetching notes: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching notes: {str(e)}")
 
 
@@ -325,83 +474,6 @@ async def sync_notes(
         raise HTTPException(status_code=500, detail=f"Error syncing notes: {str(e)}")
 
 
-@router.get("/all", response_model=List[NoteCardResponse])
-async def get_all_user_notes(
-    current_user_id: str = Depends(get_current_user)
-):
-    """Get all notes for current user across all books - optimized for card display"""
-    try:
-        db = get_db()
-        
-        # Get all notes for this user
-        query = db.collection('notes').where('user_id', '==', current_user_id)
-        docs = query.stream()
-        
-        notes = []
-        for doc in docs:
-            note_data = doc.to_dict()
-            
-            # Return lightweight card response
-            note_card = NoteCardResponse(
-                id=doc.id,
-                book_id=note_data.get('book_id'),
-                type=note_data.get('type'),
-                content=note_data.get('content'),
-                title=note_data.get('title'),
-                page_number=note_data.get('position', {}).get('page', 0),
-                tags=note_data.get('tags', []),
-                is_favorite=note_data.get('is_favorite', False),
-                created_at=note_data.get('created_at', datetime.now())
-            )
-            notes.append(note_card)
-        
-        # Sort by created_at (newest first)
-        notes.sort(key=lambda x: x.created_at, reverse=True)
-        
-        return notes
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching all notes: {str(e)}")
-
-
-@router.get("/favorites", response_model=List[NoteCardResponse])
-async def get_favorite_notes(
-    current_user_id: str = Depends(get_current_user)
-):
-    """Get all favorite notes for current user"""
-    try:
-        db = get_db()
-        
-        # Get favorite notes for this user
-        query = db.collection('notes').where('user_id', '==', current_user_id).where('is_favorite', '==', True)
-        docs = query.stream()
-        
-        notes = []
-        for doc in docs:
-            note_data = doc.to_dict()
-            
-            note_card = NoteCardResponse(
-                id=doc.id,
-                book_id=note_data.get('book_id'),
-                type=note_data.get('type'),
-                content=note_data.get('content'),
-                title=note_data.get('title'),
-                page_number=note_data.get('position', {}).get('page', 0),
-                tags=note_data.get('tags', []),
-                is_favorite=note_data.get('is_favorite', False),
-                created_at=note_data.get('created_at', datetime.now())
-            )
-            notes.append(note_card)
-        
-        # Sort by created_at (newest first)
-        notes.sort(key=lambda x: x.created_at, reverse=True)
-        
-        return notes
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching favorite notes: {str(e)}")
-
-
 @router.put("/{note_id}/favorite")
 async def toggle_favorite(
     note_id: str,
@@ -495,7 +567,7 @@ async def get_notes_for_page(
     page_number: int,
     current_user_id: str = Depends(get_current_user)
 ):
-    """Get all notes for a specific page in a book"""
+    """Get all notes for a specific page in a book (excludes bookmarks)"""
     try:
         db = get_db()
         
@@ -508,6 +580,11 @@ async def get_notes_for_page(
         notes = []
         for doc in docs:
             note_data = doc.to_dict()
+            
+            # Skip bookmark-type notes
+            if note_data.get('type') == 'bookmark':
+                continue
+            
             position = note_data.get('position')
             
             # Filter by page number

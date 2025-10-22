@@ -202,3 +202,37 @@ async def delete_bookmark_by_page(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting bookmark: {str(e)}")
 
+
+@router.get("/all", response_model=List[BookmarkResponse])
+async def get_all_user_bookmarks(
+    current_user_id: str = Depends(get_current_user)
+):
+    """Get all bookmarks for current user across all books"""
+    try:
+        db = get_db()
+        
+        # Get all bookmarks for this user
+        query = db.collection('bookmarks').where('user_id', '==', current_user_id)
+        docs = query.stream()
+        
+        bookmarks = []
+        for doc in docs:
+            bookmark_data = doc.to_dict()
+            bookmark_response = BookmarkResponse(
+                id=doc.id,
+                book_id=bookmark_data.get('book_id'),
+                user_id=bookmark_data.get('user_id'),
+                page_number=bookmark_data.get('page_number'),
+                created_at=bookmark_data.get('created_at'),
+                note=bookmark_data.get('note')
+            )
+            bookmarks.append(bookmark_response)
+        
+        # Sort by created_at (newest first)
+        bookmarks.sort(key=lambda x: x.created_at, reverse=True)
+        
+        return bookmarks
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching all bookmarks: {str(e)}")
+
