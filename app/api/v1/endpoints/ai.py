@@ -4,6 +4,7 @@ AI-powered features endpoints
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
+import logging
 
 from ....models.quiz import QuizGenRequest, Question, DifficultyLevel
 from ....models.note import AiInsights
@@ -12,6 +13,7 @@ from ....services.book_service import BookService
 from .auth import get_current_user
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class DefinitionRequest(BaseModel):
@@ -209,3 +211,231 @@ async def get_contextual_tips(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating tips: {str(e)}")
+
+
+# ========== Reading Intelligence Endpoints ==========
+
+class ReadingQuestionRequest(BaseModel):
+    """Request for asking questions about reading content"""
+    question: str
+    book_id: str
+    current_page: int
+    selected_text: Optional[str] = None
+    conversation_history: Optional[List[Dict[str, str]]] = []
+
+
+class QuickActionRequest(BaseModel):
+    """Request for quick action buttons (Define, Explain, Summarize)"""
+    action: str  # "define", "explain", "summarize"
+    text: str
+    book_id: str
+    page_number: int
+    summary_type: Optional[str] = "key_points"  # For summarize action
+
+
+@router.post("/reading/ask")
+async def ask_reading_question(
+    request: ReadingQuestionRequest,
+    current_user_id: str = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Answer questions about reading content with intelligent context extraction.
+    Extracts current page + surrounding pages for better context.
+    """
+    try:
+        from ....services.file_processor import FileProcessor
+        
+        logger.info(f"📖 Reading Q&A request for book_id={request.book_id}, page={request.current_page}")
+        
+        # Get book information
+        book_service = BookService()
+        book = await book_service.get_book(request.book_id)
+        
+        if not book:
+            logger.error(f"❌ Book not found: {request.book_id}")
+            raise HTTPException(status_code=404, detail="Book not found")
+        
+        logger.info(f"✅ Book found: {book.title}")
+        logger.info(f"📄 Book file_url: '{book.file_url}'")
+        logger.info(f"📚 Book total_pages: {book.total_pages}")
+        
+        if not book.file_url:
+            logger.error(f"❌ Book has no file_url")
+            raise HTTPException(status_code=400, detail="Book PDF not available")
+        
+        # Calculate page range for context
+        # If selected text: current page + 1 before/after (3 pages)
+        # If no selection: current page + 2 before/after (5 pages)
+        pages_before = 1 if request.selected_text else 2
+        pages_after = 1 if request.selected_text else 2
+        
+        start_page = max(1, request.current_page - pages_before)
+        end_page = min(book.total_pages, request.current_page + pages_after)
+        
+        logger.info(f"📊 Extracting pages {start_page}-{end_page} (current page: {request.current_page})")
+        
+        # Extract page content
+        file_processor = FileProcessor()
+        page_content = await file_processor.extract_text_from_pdf_pages(
+            book.file_url,
+            start_page,
+            end_page
+        )
+        
+        logger.info(f"✅ Extracted {len(page_content)} characters from pages {start_page}-{end_page}")
+        
+        # Prepare book metadata
+        book_metadata = {
+            "title": book.title,
+            "author": book.author,
+            "subject": book.subject,
+            "current_page": request.current_page,
+            "total_pages": book.total_pages
+        }
+        
+        # Get AI answer
+        ai_service = AIService()
+        result = await ai_service.answer_reading_question(
+            question=request.question,
+            page_content=page_content,
+            selected_text=request.selected_text,
+            book_metadata=book_metadata,
+            conversation_history=request.conversation_history
+        )
+        
+        # Add context information
+        result["context_range"] = f"Pages {start_page}-{end_page}"
+        result["current_page"] = request.current_page
+        result["book_id"] = request.book_id
+        result["user_id"] = current_user_id
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error answering reading question: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing question: {str(e)}")
+
+
+@router.post("/reading/quick-action")
+async def reading_quick_action(
+    request: QuickActionRequest,
+    current_user_id: str = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Handle quick action buttons: Define, Explain, or Summarize text.
+    Provides fast, focused AI responses for common reading tasks.
+    """
+    try:
+        from ....services.file_processor import FileProcessor
+        
+        # Get book information
+        book_service = BookService()
+        book = await book_service.get_book(request.book_id)
+        
+        if not book:
+            raise HTTPException(status_code=404, detail="Book not found")
+        
+        if not book.file_url:
+            raise HTTPException(status_code=400, detail="Book PDF not available")
+        
+        # Extract current page and surrounding context (3 pages total)
+        file_processor = FileProcessor()
+        start_page = max(1, request.page_number - 1)
+        end_page = min(book.total_pages, request.page_number + 1)
+        context = await file_processor.extract_text_from_pdf_pages(
+            book.file_url,
+            start_page,
+            end_page
+        )
+        
+        # Execute the requested action
+        ai_service = AIService()
+        
+        if request.action == "define":
+            result = await ai_service.quick_define(
+                text=request.text,
+                context=context,
+                book_subject=book.subject
+            )
+        elif request.action == "explain":
+            result = await ai_service.quick_explain(
+                concept=request.text,
+                context=context,
+                difficulty_level="intermediate"
+            )
+        elif request.action == "summarize":
+            result = await ai_service.summarize_content(
+                content=context,
+                summary_type=request.summary_type or "key_points",
+                selected_text=request.text if request.text else None
+            )
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown action: {request.action}")
+        
+        # Add metadata
+        result["book_id"] = request.book_id
+        result["page_number"] = request.page_number
+        result["user_id"] = current_user_id
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error processing quick action: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing action: {str(e)}")
+
+
+@router.get("/reading/page-content/{book_id}/{page_number}")
+async def get_page_content(
+    book_id: str,
+    page_number: int,
+    current_user_id: str = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Extract and return content for a specific page.
+    Used by frontend to display context or for text extraction.
+    """
+    try:
+        from ....services.file_processor import FileProcessor
+        
+        # Get book information
+        book_service = BookService()
+        book = await book_service.get_book(book_id)
+        
+        if not book:
+            raise HTTPException(status_code=404, detail="Book not found")
+        
+        if not book.file_url:
+            raise HTTPException(status_code=400, detail="Book PDF not available")
+        
+        # Validate page number
+        if page_number < 1 or page_number > book.total_pages:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Page number {page_number} out of range (1-{book.total_pages})"
+            )
+        
+        # Extract page content
+        file_processor = FileProcessor()
+        page_content = await file_processor.extract_text_from_pdf_page(
+            book.file_url,
+            page_number
+        )
+        
+        return {
+            "book_id": book_id,
+            "page_number": page_number,
+            "total_pages": book.total_pages,
+            "content": page_content,
+            "book_title": book.title,
+            "book_subject": book.subject
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error extracting page content: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error extracting page: {str(e)}")

@@ -468,3 +468,215 @@ class AIService:
                 "page": page_number,
                 "icon": "lightbulb_outline"
             }
+    
+    async def answer_reading_question(
+        self,
+        question: str,
+        page_content: str,
+        selected_text: Optional[str] = None,
+        book_metadata: Optional[Dict[str, Any]] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> Dict[str, Any]:
+        """Answer questions about reading content with context awareness"""
+        try:
+            # Build context from available information
+            context_parts = []
+            
+            if selected_text:
+                context_parts.append(f"Selected text: \"{selected_text}\"")
+            
+            context_parts.append(f"Page content:\n{page_content[:2000]}")  # Limit to avoid token overflow
+            
+            if book_metadata:
+                context_parts.append(f"Book: {book_metadata.get('title', 'Unknown')} by {book_metadata.get('author', 'Unknown')}")
+                context_parts.append(f"Subject: {book_metadata.get('subject', 'General')}")
+            
+            context = "\n\n".join(context_parts)
+            
+            # Build conversation history for context
+            messages = []
+            if conversation_history:
+                for msg in conversation_history[-6:]:  # Keep last 6 messages for context
+                    messages.append({
+                        "role": msg.get("role", "user"),
+                        "content": msg.get("content", "")
+                    })
+            
+            # Add current question with context
+            prompt = f"""You are an educational AI assistant helping a student understand their reading material.
+
+Context:
+{context}
+
+Student's Question: {question}
+
+Please provide a clear, educational answer that:
+1. Directly answers the student's question
+2. References the reading material when relevant
+3. Explains concepts in a student-friendly way
+4. Suggests related topics they might want to explore
+
+Keep your answer concise but comprehensive (2-3 paragraphs)."""
+
+            messages.append({"role": "user", "content": prompt})
+            
+            response = await self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                max_tokens=600,
+                temperature=0.5
+            )
+            
+            answer = response.choices[0].message.content.strip()
+            
+            return {
+                "answer": answer,
+                "confidence": 0.85,
+                "has_selected_text": selected_text is not None,
+                "timestamp": "now"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error answering reading question: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error generating answer: {str(e)}")
+    
+    async def quick_define(
+        self,
+        text: str,
+        context: str,
+        book_subject: str = "General"
+    ) -> Dict[str, Any]:
+        """Provide enhanced definition with educational context"""
+        try:
+            prompt = f"""Define the following term/phrase for a student reading {book_subject} material:
+
+Term: "{text}"
+
+Context from reading:
+{context[:500]}
+
+Provide:
+1. A clear, simple definition
+2. How it's used in this context
+3. An example sentence
+4. Any related terms the student should know
+
+Format your response as a short, educational explanation (2-3 paragraphs max)."""
+
+            response = await self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=400,
+                temperature=0.3
+            )
+            
+            definition = response.choices[0].message.content.strip()
+            
+            return {
+                "term": text,
+                "definition": definition,
+                "subject": book_subject,
+                "action_type": "define"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating definition: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error generating definition: {str(e)}")
+    
+    async def quick_explain(
+        self,
+        concept: str,
+        context: str,
+        difficulty_level: str = "intermediate"
+    ) -> Dict[str, Any]:
+        """Explain concepts with examples and analogies"""
+        try:
+            prompt = f"""Explain this concept to a student at {difficulty_level} level:
+
+Concept: "{concept}"
+
+Context:
+{context[:500]}
+
+Your explanation should:
+1. Break down the concept into simple terms
+2. Use an analogy or real-world example
+3. Explain why it's important
+4. Show how it connects to the reading
+
+Keep it concise and engaging (2-3 paragraphs)."""
+
+            response = await self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=500,
+                temperature=0.4
+            )
+            
+            explanation = response.choices[0].message.content.strip()
+            
+            return {
+                "concept": concept,
+                "explanation": explanation,
+                "difficulty_level": difficulty_level,
+                "action_type": "explain"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating explanation: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error generating explanation: {str(e)}")
+    
+    async def summarize_content(
+        self,
+        content: str,
+        summary_type: str = "key_points",
+        selected_text: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Summarize page/section content"""
+        try:
+            # Determine what to summarize
+            text_to_summarize = selected_text if selected_text else content[:2000]
+            
+            if summary_type == "key_points":
+                prompt = f"""Extract the key points from this reading material:
+
+{text_to_summarize}
+
+List 3-5 main points in bullet format. Keep each point concise (1-2 sentences)."""
+            
+            elif summary_type == "brief":
+                prompt = f"""Provide a brief summary (2-3 sentences) of this reading material:
+
+{text_to_summarize}"""
+            
+            else:  # detailed
+                prompt = f"""Provide a detailed summary of this reading material:
+
+{text_to_summarize}
+
+Include:
+- Main ideas and themes
+- Important details and examples
+- Key concepts introduced
+
+Keep it to 1-2 paragraphs."""
+
+            response = await self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=400,
+                temperature=0.3
+            )
+            
+            summary = response.choices[0].message.content.strip()
+            
+            return {
+                "summary": summary,
+                "summary_type": summary_type,
+                "content_length": len(text_to_summarize),
+                "action_type": "summarize"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating summary: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error generating summary: {str(e)}")

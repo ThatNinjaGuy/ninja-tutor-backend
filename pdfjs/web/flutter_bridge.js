@@ -60,6 +60,22 @@ window.addEventListener("message", function (event) {
       document.body.classList.toggle("highlight-mode", highlightMode);
       sendToFlutter("highlightModeChanged", { enabled: highlightMode });
       break;
+
+    case "setScrollEnabled":
+      // Enable or disable scrolling in the PDF viewer
+      const container = document.getElementById("viewerContainer");
+      if (container) {
+        if (message.enabled) {
+          container.style.overflow = "auto";
+          container.style.pointerEvents = "auto";
+          console.log("✅ PDF scrolling enabled");
+        } else {
+          container.style.overflow = "hidden";
+          container.style.pointerEvents = "none";
+          console.log("🚫 PDF scrolling disabled");
+        }
+      }
+      break;
   }
 });
 
@@ -105,27 +121,34 @@ function resetIdleTimer() {
   }, 10000);
 }
 
-// Text selection tracking
+// Text selection tracking with page coordinates
 function onTextSelection() {
   const selection = window.getSelection();
   selectedText = selection.toString().trim();
 
   if (selectedText) {
-    // Get selection position
+    // Get selection position (viewport coordinates)
     const range = selection.getRangeAt(0);
     const rect = range.getBoundingClientRect();
 
+    // Try to get PDF page coordinates
+    const pageCoordinates = getPdfPageCoordinates(rect);
+
     selectedTextPosition = {
-      x: rect.left,
-      y: rect.top,
+      // Viewport coordinates
+      viewportX: rect.left,
+      viewportY: rect.top,
       width: rect.width,
       height: rect.height,
+      // PDF page coordinates (if available)
+      ...pageCoordinates,
     };
 
     sendToFlutter("textSelection", {
       text: selectedText,
       page: currentPage,
       position: selectedTextPosition,
+      charCount: selectedText.length,
     });
   } else {
     selectedText = "";
@@ -135,6 +158,49 @@ function onTextSelection() {
       page: currentPage,
       position: null,
     });
+  }
+}
+
+// Convert viewport coordinates to PDF page coordinates
+function getPdfPageCoordinates(rect) {
+  try {
+    if (
+      !window.PDFViewerApplication ||
+      !window.PDFViewerApplication.pdfViewer
+    ) {
+      return {};
+    }
+
+    const viewer = window.PDFViewerApplication.pdfViewer;
+    const page = viewer.getPageView(currentPage - 1); // 0-indexed
+
+    if (!page || !page.viewport) {
+      return {};
+    }
+
+    // Get page container position
+    const pageElement = page.div;
+    const pageRect = pageElement.getBoundingClientRect();
+
+    // Calculate relative position within the page
+    const relativeX = rect.left - pageRect.left;
+    const relativeY = rect.top - pageRect.top;
+
+    // Convert to PDF coordinates (PDF origin is bottom-left)
+    const viewport = page.viewport;
+    const pdfX = relativeX / viewport.scale;
+    const pdfY = (pageRect.height - relativeY) / viewport.scale;
+
+    return {
+      pdfX: Math.round(pdfX),
+      pdfY: Math.round(pdfY),
+      pdfWidth: Math.round(rect.width / viewport.scale),
+      pdfHeight: Math.round(rect.height / viewport.scale),
+      scale: viewport.scale,
+    };
+  } catch (error) {
+    console.error("Error getting PDF coordinates:", error);
+    return {};
   }
 }
 
@@ -155,6 +221,186 @@ function createHighlight(text, color = "yellow") {
   window.getSelection().removeAllRanges();
   selectedText = "";
   selectedTextPosition = null;
+}
+
+// Track existing annotations on a page
+function trackAnnotations(pageNumber) {
+  try {
+    const viewer = window.PDFViewerApplication.pdfViewer;
+    const pageView = viewer.getPageView(pageNumber - 1);
+
+    if (!pageView || !pageView.annotationLayer) {
+      return;
+    }
+
+    // Get all annotation elements
+    const annotationElements = pageView.annotationLayer.div.querySelectorAll(
+      ".annotationLayer > section"
+    );
+
+    console.log(
+      `Found ${annotationElements.length} annotations on page ${pageNumber}`
+    );
+  } catch (error) {
+    console.error("Error tracking annotations:", error);
+  }
+}
+
+// Capture editor annotations (drawings, text added by user)
+function captureEditorAnnotations(pageNumber) {
+  try {
+    const viewer = window.PDFViewerApplication.pdfViewer;
+    const pageView = viewer.getPageView(pageNumber - 1);
+
+    if (!pageView || !pageView.annotationEditorLayer) {
+      return;
+    }
+
+    // Get all editor annotations
+    const editorLayer = pageView.annotationEditorLayer.div;
+    const editors = editorLayer.querySelectorAll(
+      ".annotationEditorLayer > div"
+    );
+
+    editors.forEach((editor) => {
+      captureAnnotationData(editor, pageNumber);
+    });
+  } catch (error) {
+    console.error("Error capturing editor annotations:", error);
+  }
+}
+
+// Capture data from a specific annotation element
+function captureAnnotationData(element, pageNumber) {
+  try {
+    const annotationType =
+      element.getAttribute("data-editor-type") || "unknown";
+    const rect = element.getBoundingClientRect();
+    const pageCoordinates = getPdfPageCoordinates(rect);
+
+    let annotationData = {
+      type: annotationType,
+      page: pageNumber,
+      position: {
+        viewportX: rect.left,
+        viewportY: rect.top,
+        width: rect.width,
+        height: rect.height,
+        ...pageCoordinates,
+      },
+      timestamp: Date.now(),
+    };
+
+    // Extract annotation-specific data
+    if (annotationType === "freetext") {
+      // Text annotation
+      const textElement = element.querySelector(".internal");
+      annotationData.text = textElement ? textElement.textContent : "";
+      annotationData.fontSize = window.getComputedStyle(
+        textElement || element
+      ).fontSize;
+      annotationData.color = window.getComputedStyle(element).color;
+    } else if (annotationType === "ink") {
+      // Drawing/ink annotation
+      const canvas = element.querySelector("canvas");
+      if (canvas) {
+        annotationData.drawingData = canvas.toDataURL("image/png");
+        annotationData.width = canvas.width;
+        annotationData.height = canvas.height;
+      }
+    } else if (annotationType === "highlight") {
+      // Highlight annotation
+      annotationData.color = window.getComputedStyle(element).backgroundColor;
+    }
+
+    sendToFlutter("annotation", annotationData);
+    console.log("Captured annotation:", annotationType, "on page", pageNumber);
+  } catch (error) {
+    console.error("Error capturing annotation data:", error);
+  }
+}
+
+// Capture all annotations from all pages
+function captureAllAnnotations() {
+  try {
+    if (
+      !window.PDFViewerApplication ||
+      !window.PDFViewerApplication.pdfViewer
+    ) {
+      // Only log if this is unexpected
+      return;
+    }
+
+    const viewer = window.PDFViewerApplication.pdfViewer;
+    let totalAnnotations = 0;
+
+    // Loop through all rendered pages
+    for (let i = 0; i < viewer._pages.length; i++) {
+      const pageView = viewer._pages[i];
+
+      if (!pageView) {
+        continue;
+      }
+
+      // Check for annotation editor layer (silently skip if not present)
+      if (!pageView.annotationEditorLayer) {
+        continue;
+      }
+
+      const editorLayer = pageView.annotationEditorLayer.div;
+      if (!editorLayer) {
+        continue;
+      }
+
+      // Look for various annotation element patterns
+      const editors = editorLayer.querySelectorAll(
+        'section, div[class*="Editor"], *[data-editor-rotation]'
+      );
+
+      // Only log if we actually found annotations
+      if (editors.length === 0) {
+        continue;
+      }
+
+      console.log(`📝 Page ${i + 1}: Found ${editors.length} annotations`);
+
+      editors.forEach((editor, idx) => {
+        const alreadySent = editor.getAttribute("data-sent-to-flutter");
+
+        // Only process new annotations
+        if (alreadySent) {
+          return; // Skip already sent annotations silently
+        }
+
+        // Determine annotation type from class or data attributes
+        let annotationType = editor.getAttribute("data-editor-type");
+        if (!annotationType) {
+          if (editor.className.includes("freeText"))
+            annotationType = "freetext";
+          else if (editor.className.includes("ink")) annotationType = "ink";
+          else annotationType = "unknown";
+        }
+
+        const id =
+          editor.getAttribute("data-annotation-id") ||
+          `${Date.now()}-${Math.random()}`;
+
+        // Log and capture new annotation
+        console.log(`✨ NEW ANNOTATION: type=${annotationType}, page=${i + 1}`);
+        editor.setAttribute("data-sent-to-flutter", "true");
+        editor.setAttribute("data-annotation-id", id);
+        captureAnnotationData(editor, i + 1);
+        totalAnnotations++;
+      });
+    }
+
+    if (totalAnnotations > 0) {
+      console.log(`✅ Captured ${totalAnnotations} new annotations`);
+    }
+  } catch (error) {
+    console.error("❌ Error capturing annotations:", error);
+    console.error(error.stack);
+  }
 }
 
 // Initialize when PDF.js is ready
@@ -187,9 +433,31 @@ function setupEventListeners() {
   // Page change events
   if (window.PDFViewerApplication && window.PDFViewerApplication.eventBus) {
     try {
-      window.PDFViewerApplication.eventBus.on("pagechanging", (evt) => {
+      const eventBus = window.PDFViewerApplication.eventBus;
+
+      eventBus.on("pagechanging", (evt) => {
         onPageChange(evt.pageNumber);
       });
+
+      // Annotation events
+      eventBus.on("annotationlayerrendered", (evt) => {
+        console.log("Annotation layer rendered for page", evt.pageNumber);
+        trackAnnotations(evt.pageNumber);
+      });
+
+      // Listen for annotation editor events (drawing, text)
+      if (window.PDFViewerApplication.pdfViewer) {
+        const viewer = window.PDFViewerApplication.pdfViewer;
+
+        // Monitor for annotation changes
+        eventBus.on("annotationeditorlayerrendered", (evt) => {
+          console.log(
+            "Annotation editor layer rendered for page",
+            evt.pageNumber
+          );
+          captureEditorAnnotations(evt.pageNumber);
+        });
+      }
 
       // Initial page
       currentPage = window.PDFViewerApplication.page || 1;
@@ -215,6 +483,9 @@ function setupEventListeners() {
   document.addEventListener("mouseup", onTextSelection);
   document.addEventListener("selectionchange", onTextSelection);
 
+  // Monitor for annotation changes periodically
+  setInterval(captureAllAnnotations, 2000); // Check every 2 seconds
+
   // Initialize idle timer
   resetIdleTimer();
 
@@ -225,6 +496,41 @@ function setupEventListeners() {
       : 0,
     currentPage: currentPage,
   });
+
+  // Diagnostic logging (reduced verbosity)
+  console.log("✅ PDF Bridge initialized - ready to capture annotations");
+
+  // Debug mode can be enabled by setting window.DEBUG_PDF_BRIDGE = true
+  if (window.DEBUG_PDF_BRIDGE) {
+    console.log("📚 ===== PDF Annotation Capture System =====");
+    console.log(`📄 Total pages: ${window.PDFViewerApplication.pagesCount}`);
+    console.log(`📍 Current page: ${currentPage}`);
+    console.log("🔄 Checking for annotations every 2 seconds...");
+    console.log("==========================================");
+
+    // Check if annotation mode is available
+    setTimeout(() => {
+      const viewer = window.PDFViewerApplication.pdfViewer;
+      console.log("🔍 PDF.js Editor Mode Status:");
+      console.log(
+        "   annotationEditorMode:",
+        window.PDFViewerApplication.pdfViewer.annotationEditorMode
+      );
+      console.log(
+        "   annotationEditorParams:",
+        window.PDFViewerApplication.annotationEditorParams
+      );
+
+      // List all pages and their editor layers
+      viewer._pages.forEach((page, idx) => {
+        if (page.annotationEditorLayer) {
+          console.log(`   Page ${idx + 1}: annotationEditorLayer EXISTS ✅`);
+        } else {
+          console.log(`   Page ${idx + 1}: annotationEditorLayer MISSING ❌`);
+        }
+      });
+    }, 3000);
+  }
 }
 
 // Global functions for external access
