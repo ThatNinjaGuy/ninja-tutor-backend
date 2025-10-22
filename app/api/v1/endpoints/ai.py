@@ -284,6 +284,11 @@ async def ask_reading_question(
         
         logger.info(f"✅ Extracted {len(page_content)} characters from pages {start_page}-{end_page}")
         
+        # Log a sample of extracted content for verification
+        if len(page_content) > 0:
+            sample = page_content[:200].replace('\n', ' ')
+            logger.info(f"📄 Content sample: '{sample}...'")
+        
         # Prepare book metadata
         book_metadata = {
             "title": book.title,
@@ -292,6 +297,10 @@ async def ask_reading_question(
             "current_page": request.current_page,
             "total_pages": book.total_pages
         }
+        
+        logger.info(f"📚 Book metadata: {book_metadata}")
+        logger.info(f"❓ Question: '{request.question}'")
+        logger.info(f"📝 Selected text: {request.selected_text[:100] if request.selected_text else 'None'}")
         
         # Get AI answer
         ai_service = AIService()
@@ -302,6 +311,11 @@ async def ask_reading_question(
             book_metadata=book_metadata,
             conversation_history=request.conversation_history
         )
+        
+        logger.info(f"✅ AI response generated successfully")
+        logger.info(f"   Response length: {len(result.get('answer', ''))} chars")
+        logger.info(f"   Tokens used: {result.get('tokens_used', 'N/A')}")
+        logger.info(f"   Context sent: {result.get('context_chars', 'N/A')} chars")
         
         # Add context information
         result["context_range"] = f"Pages {start_page}-{end_page}"
@@ -330,6 +344,8 @@ async def reading_quick_action(
     try:
         from ....services.file_processor import FileProcessor
         
+        logger.info(f"⚡ Quick action '{request.action}' for text: '{request.text[:50]}...'")
+        
         # Get book information
         book_service = BookService()
         book = await book_service.get_book(request.book_id)
@@ -340,6 +356,8 @@ async def reading_quick_action(
         if not book.file_url:
             raise HTTPException(status_code=400, detail="Book PDF not available")
         
+        logger.info(f"📚 Book: {book.title}, Page: {request.page_number}")
+        
         # Extract current page and surrounding context (3 pages total)
         file_processor = FileProcessor()
         start_page = max(1, request.page_number - 1)
@@ -349,6 +367,8 @@ async def reading_quick_action(
             start_page,
             end_page
         )
+        
+        logger.info(f"✅ Extracted context: {len(context)} chars from pages {start_page}-{end_page}")
         
         # Execute the requested action
         ai_service = AIService()
@@ -379,12 +399,16 @@ async def reading_quick_action(
         result["page_number"] = request.page_number
         result["user_id"] = current_user_id
         
+        logger.info(f"✅ Quick action '{request.action}' completed successfully")
+        logger.info(f"   Tokens used: {result.get('tokens_used', 'N/A')}")
+        
         return result
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error processing quick action: {str(e)}")
+        logger.error(f"❌ Error processing quick action '{request.action}': {str(e)}")
+        logger.exception("Full traceback:")
         raise HTTPException(status_code=500, detail=f"Error processing action: {str(e)}")
 
 
