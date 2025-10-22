@@ -291,6 +291,7 @@ async def ask_reading_question(
         
         # Prepare book metadata
         book_metadata = {
+            "book_id": request.book_id,
             "title": book.title,
             "author": book.author,
             "subject": book.subject,
@@ -302,14 +303,16 @@ async def ask_reading_question(
         logger.info(f"❓ Question: '{request.question}'")
         logger.info(f"📝 Selected text: {request.selected_text[:100] if request.selected_text else 'None'}")
         
-        # Get AI answer
+        # Get AI answer using ADK agent
         ai_service = AIService()
         result = await ai_service.answer_reading_question(
             question=request.question,
             page_content=page_content,
             selected_text=request.selected_text,
             book_metadata=book_metadata,
-            conversation_history=request.conversation_history
+            conversation_history=request.conversation_history,
+            user_id=current_user_id,
+            book_file_path=book.file_url
         )
         
         logger.info(f"✅ AI response generated successfully")

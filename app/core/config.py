@@ -24,8 +24,9 @@ class Settings(BaseSettings):
     FIREBASE_AUTH_URI: str = "https://accounts.google.com/o/oauth2/auth"
     FIREBASE_TOKEN_URI: str = "https://oauth2.googleapis.com/token"
     
-    # OpenAI Configuration
-    OPENAI_API_KEY: str
+    # AI Configuration
+    OPENAI_API_KEY: str  # Keep for backward compatibility
+    GOOGLE_API_KEY: Optional[str] = None  # Google Gemini API Key
     
     # File Storage
     MAX_FILE_SIZE: int = 50 * 1024 * 1024  # 50MB

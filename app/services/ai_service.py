@@ -1,24 +1,41 @@
 """
 AI service for content analysis and quiz generation
 """
-from openai import AsyncOpenAI
 from typing import List, Dict, Any, Optional
 from fastapi import HTTPException
 import json
 import logging
+import google.generativeai as genai
 
 from ..core.config import settings
 from ..models.quiz import Question, QuestionType, AnswerOption, DifficultyLevel
 from ..models.note import AiInsights
+from .reading_agent import get_reading_agent
 
 logger = logging.getLogger(__name__)
 
 
 class AIService:
-    """Service for AI-powered features"""
+    """Service for AI-powered features using Google Gemini"""
     
     def __init__(self):
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        # Configure Gemini with API key (using Firebase credentials)
+        # Note: We'll use google.generativeai which works with API keys
+        # For now, we'll need to set up GOOGLE_API_KEY in .env
+        
+        # Check if we have Google API key, otherwise inform user
+        google_api_key = getattr(settings, 'GOOGLE_API_KEY', None) or settings.OPENAI_API_KEY
+        
+        if not google_api_key:
+            logger.error("❌ No API key found. Please set GOOGLE_API_KEY in .env")
+            raise ValueError("GOOGLE_API_KEY not configured")
+        
+        genai.configure(api_key=google_api_key)
+        
+        # Use Gemini model (correct name for google-generativeai SDK)
+        self.model = genai.GenerativeModel('models/gemini-2.5-flash')
+        logger.info(f"✅ Google Gemini initialized")
+        logger.info(f"   Model: gemini-1.5-flash-latest")
     
     async def get_definition(self, text: str, context: str) -> Dict[str, Any]:
         """Get AI-powered definition for selected text"""
@@ -32,23 +49,23 @@ class AIService:
             1. A simple definition suitable for students
             2. An example of usage
             3. Any relevant synonyms or related terms
-            
-            Format as JSON with fields: definition, example, related_terms
             """
             
-            response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=300,
-                temperature=0.3
+            generation_config = genai.types.GenerationConfig(
+                max_output_tokens=300,
+                temperature=0.3,
             )
             
-            # Parse response (simplified - in production, add proper JSON parsing)
-            content = response.choices[0].message.content
+            response = self.model.generate_content(
+                prompt,
+                generation_config=generation_config
+            )
+            
+            content = response.text
             
             return {
                 "definition": content,
-                "source": "AI Generated",
+                "source": "Gemini AI",
                 "confidence": 0.85
             }
             
@@ -72,14 +89,15 @@ class AIService:
             Keep the explanation concise but comprehensive.
             """
             
-            response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=500,
-                temperature=0.4
+            response = self.model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    max_output_tokens=500,
+                    temperature=0.4,
+                )
             )
             
-            content = response.choices[0].message.content
+            content = response.text
             
             return {
                 "explanation": content,
@@ -125,18 +143,19 @@ class AIService:
             ---
             """
             
-            logger.info(f"🌐 Calling OpenAI API...")
-            response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=1500,
-                temperature=0.6
+            logger.info(f"🌐 Calling Vertex AI Gemini...")
+            response = self.model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    max_output_tokens=1500,
+                    temperature=0.6,
+                )
             )
             
-            logger.info(f"✅ OpenAI response received")
+            logger.info(f"✅ Gemini response received")
             
             # Parse response and create Question objects
-            content_response = response.choices[0].message.content
+            content_response = response.text
             logger.info(f"📄 Response content length: {len(content_response)} chars")
             logger.debug(f"🔍 AI Response:\n{content_response}")
             
@@ -292,14 +311,15 @@ class AIService:
             Expected reading speed: 200-300 words per minute for comprehension.
             """
             
-            response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=400,
-                temperature=0.3
+            response = self.model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    max_output_tokens=400,
+                    temperature=0.3,
+                )
             )
             
-            content = response.choices[0].message.content
+            content = response.text
             
             # Calculate basic metrics
             word_count = len(content.split())
@@ -332,14 +352,15 @@ class AIService:
             5. Difficulty assessment
             """
             
-            response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=500,
-                temperature=0.4
+            response = self.model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    max_output_tokens=500,
+                    temperature=0.4,
+                )
             )
             
-            content = response.choices[0].message.content
+            content = response.text
             
             # Simple parsing - in production, use structured output
             return AiInsights(
@@ -381,14 +402,15 @@ class AIService:
             Format as a list of tips, each 1-2 sentences.
             """
             
-            response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=400,
-                temperature=0.7
+            response = self.model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    max_output_tokens=400,
+                    temperature=0.7,
+                )
             )
             
-            content = response.choices[0].message.content
+            content = response.text
             
             # Parse tips (simplified)
             tips = [tip.strip() for tip in content.split('\n') if tip.strip() and not tip.strip().startswith('#')]
@@ -436,14 +458,15 @@ class AIService:
             Keep it to 1-2 sentences, friendly tone.
             """
             
-            response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=150,
-                temperature=0.7
+            response = self.model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    max_output_tokens=150,
+                    temperature=0.7,
+                )
             )
             
-            tip = response.choices[0].message.content.strip()
+            tip = response.text.strip()
             
             return {
                 "tip": tip,
@@ -475,9 +498,52 @@ class AIService:
         page_content: str,
         selected_text: Optional[str] = None,
         book_metadata: Optional[Dict[str, Any]] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        user_id: Optional[str] = None,
+        book_file_path: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Answer questions about reading content using Google ADK Agent.
+        The agent can use tools to extract and analyze content dynamically.
+        """
+        try:
+            # Use ADK agent for intelligent, tool-using responses
+            if book_file_path and book_metadata and user_id:
+                logger.info("🤖 Using ADK Reading Agent for question answering")
+                
+                reading_agent = get_reading_agent()
+                result = await reading_agent.ask_question(
+                    question=question,
+                    book_file_path=book_file_path,
+                    book_metadata=book_metadata,
+                    user_id=user_id,
+                    current_page=book_metadata.get('current_page', 1),
+                    selected_text=selected_text,
+                    conversation_history=conversation_history
+                )
+                
+                return result
+            
+            # Fallback to direct API call if agent prerequisites not met
+            logger.warning("⚠️ Falling back to direct Gemini call (missing agent prerequisites)")
+            return await self._answer_with_direct_api(
+                question, page_content, selected_text, book_metadata, conversation_history
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error in answer_reading_question: {str(e)}")
+            logger.exception("Full traceback:")
+            raise HTTPException(status_code=500, detail=f"Error generating answer: {str(e)}")
+    
+    async def _answer_with_direct_api(
+        self,
+        question: str,
+        page_content: str,
+        selected_text: Optional[str] = None,
+        book_metadata: Optional[Dict[str, Any]] = None,
         conversation_history: Optional[List[Dict[str, str]]] = None
     ) -> Dict[str, Any]:
-        """Answer questions about reading content with context awareness"""
+        """Direct API fallback (original implementation)"""
         try:
             # Calculate available tokens for context
             # gpt-3.5-turbo: 4096 tokens total
@@ -530,48 +596,64 @@ Pages Provided: This material covers multiple pages around the current page."""
                     })
                 logger.info(f"📜 Added {len(conversation_history[-8:])} messages from history")
             
-            # Build current question with context
-            user_message_parts = []
+            # Build complete prompt for Gemini (combines system message and user content)
+            prompt_parts = []
+            
+            # Add system instructions
+            prompt_parts.append(system_message)
+            prompt_parts.append("")  # Blank line
+            
+            # Add conversation history if available
+            if conversation_history and len(conversation_history) > 0:
+                prompt_parts.append("=== PREVIOUS CONVERSATION ===")
+                for msg in conversation_history[-8:]:
+                    role_label = "Student" if msg.get("role") == "user" else "Assistant"
+                    prompt_parts.append(f"{role_label}: {msg.get('content', '')}")
+                prompt_parts.append("=== END PREVIOUS CONVERSATION ===")
+                prompt_parts.append("")
             
             # Add reading material
-            user_message_parts.append("=== READING MATERIAL ===")
-            user_message_parts.append(page_content)
-            user_message_parts.append("=== END READING MATERIAL ===")
-            user_message_parts.append("")  # Blank line
+            prompt_parts.append("=== READING MATERIAL ===")
+            prompt_parts.append(page_content)
+            prompt_parts.append("=== END READING MATERIAL ===")
+            prompt_parts.append("")
             
             # Add selected text if available (gives AI focus)
             if selected_text:
-                user_message_parts.append(f"Selected text from page: \"{selected_text}\"")
-                user_message_parts.append("")
+                prompt_parts.append(f"Selected text from current page: \"{selected_text}\"")
+                prompt_parts.append("")
             
             # Add the actual question
-            user_message_parts.append(f"Question: {question}")
+            prompt_parts.append(f"Student's Question: {question}")
+            prompt_parts.append("")
+            prompt_parts.append("Please provide a clear, educational answer based on the reading material above.")
             
-            current_message = "\n".join(user_message_parts)
-            messages.append({"role": "user", "content": current_message})
+            full_prompt = "\n".join(prompt_parts)
             
-            logger.info(f"📤 Sending to OpenAI:")
-            logger.info(f"   Model: gpt-3.5-turbo")
-            logger.info(f"   System message: {len(system_message)} chars")
-            logger.info(f"   Current message: {len(current_message)} chars")
-            logger.info(f"   Total messages: {len(messages)}")
+            logger.info(f"📤 Sending to Google Gemini:")
+            logger.info(f"   Model: gemini-1.5-flash-latest")
+            logger.info(f"   Prompt length: {len(full_prompt)} chars")
             
-            # Call OpenAI with improved parameters
-            response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=messages,
-                max_tokens=800,  # Increased for more detailed answers
-                temperature=0.3,  # Lower for more focused, factual responses
-                top_p=0.9,  # Slight nucleus sampling for quality
+            # Call Google Gemini
+            generation_config = genai.types.GenerationConfig(
+                max_output_tokens=800,
+                temperature=0.3,
+                top_p=0.9,
             )
             
-            answer = response.choices[0].message.content.strip()
-            tokens_used = response.usage.total_tokens if response.usage else 0
+            response = self.model.generate_content(
+                full_prompt,
+                generation_config=generation_config
+            )
             
-            logger.info(f"✅ Received response from OpenAI")
+            answer = response.text.strip()
+            
+            # Vertex AI doesn't provide token counts in the same way, estimate them
+            tokens_used = len(full_prompt) // 4 + len(answer) // 4  # Rough estimate
+            
+            logger.info(f"✅ Received response from Google Gemini")
             logger.info(f"   Response length: {len(answer)} chars")
-            logger.info(f"   Tokens used: {tokens_used}")
-            logger.info(f"   Finish reason: {response.choices[0].finish_reason}")
+            logger.info(f"   Estimated tokens: {tokens_used}")
             
             return {
                 "answer": answer,
@@ -618,18 +700,18 @@ Provide:
 
 Keep it educational and concise (2-3 paragraphs)."""
 
-            response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=500,
-                temperature=0.3
+            full_prompt = f"{system_message}\n\n{user_prompt}"
+            
+            response = self.model.generate_content(
+                full_prompt,
+                generation_config=genai.types.GenerationConfig(
+                    max_output_tokens=500,
+                    temperature=0.3,
+                )
             )
             
-            definition = response.choices[0].message.content.strip()
-            tokens_used = response.usage.total_tokens if response.usage else 0
+            definition = response.text.strip()
+            tokens_used = len(full_prompt) // 4 + len(definition) // 4
             
             logger.info(f"✅ Definition generated ({len(definition)} chars, {tokens_used} tokens)")
             
@@ -677,18 +759,18 @@ Based on the reading material above, provide an explanation that:
 
 Keep it educational, engaging, and student-friendly (2-3 paragraphs)."""
 
-            response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=600,
-                temperature=0.4
+            full_prompt = f"{system_message}\n\n{user_prompt}"
+            
+            response = self.model.generate_content(
+                full_prompt,
+                generation_config=genai.types.GenerationConfig(
+                    max_output_tokens=600,
+                    temperature=0.4,
+                )
             )
             
-            explanation = response.choices[0].message.content.strip()
-            tokens_used = response.usage.total_tokens if response.usage else 0
+            explanation = response.text.strip()
+            tokens_used = len(full_prompt) // 4 + len(explanation) // 4
             
             logger.info(f"✅ Explanation generated ({len(explanation)} chars, {tokens_used} tokens)")
             
@@ -765,18 +847,18 @@ Include:
 
 Keep it comprehensive but organized (2-3 paragraphs)."""
 
-            response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=500,
-                temperature=0.3
+            full_prompt = f"{system_message}\n\n{user_prompt}"
+            
+            response = self.model.generate_content(
+                full_prompt,
+                generation_config=genai.types.GenerationConfig(
+                    max_output_tokens=500,
+                    temperature=0.3,
+                )
             )
             
-            summary = response.choices[0].message.content.strip()
-            tokens_used = response.usage.total_tokens if response.usage else 0
+            summary = response.text.strip()
+            tokens_used = len(full_prompt) // 4 + len(summary) // 4
             
             logger.info(f"✅ Summary generated ({len(summary)} chars, {tokens_used} tokens)")
             
