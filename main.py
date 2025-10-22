@@ -12,6 +12,7 @@ import uvicorn
 
 from app.core.config import settings
 from app.core.firebase_config import initialize_firebase
+from app.core.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from app.api.v1.router import api_router
 
 # Configure logging
@@ -57,20 +58,30 @@ app = FastAPI(
 # Ensure upload directory exists before mounting static files
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 
-# CORS middleware
+# Security middleware (order matters - these run first)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RateLimitMiddleware, calls=100, period=60)  # 100 requests per minute
+
+# CORS middleware - environment-based configuration
+allowed_origins = [
+    "http://localhost:3000",  # Flutter web dev server
+    "http://127.0.0.1:3000",  # Alternative localhost
+    "http://localhost:8080",  # Alternative Flutter port
+    "http://127.0.0.1:8080",  # Alternative localhost
+]
+
+# In production, don't use wildcard
+if settings.DEBUG:
+    logger.warning("⚠️  CORS wildcard enabled - DEBUG mode. Disable in production!")
+    allowed_origins.append("*")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # Flutter web dev server
-        "http://127.0.0.1:3000",  # Alternative localhost
-        "http://localhost:8080",  # Alternative Flutter port
-        "http://127.0.0.1:8080",  # Alternative localhost
-        "*"  # Allow all for development (remove in production)
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
-    expose_headers=["*"],  # Expose all headers
+    expose_headers=["*"],
 )
 
 # Static files for uploaded content
