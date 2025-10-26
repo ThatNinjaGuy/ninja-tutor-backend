@@ -3,10 +3,12 @@ Book management endpoints
 """
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+import os
 
 from ....models.book import BookUpload, BookResponse, BookCardResponse, Book
 from ....services.book_service import BookService
+from ....core.config import settings
 
 router = APIRouter()
 
@@ -83,6 +85,48 @@ async def search_books(q: str, limit: int = 20):
     book_service = BookService()
     books = await book_service.search_books(q, limit=limit)
     return books
+
+
+# IMPORTANT: This must be BEFORE the generic /{book_id} route to avoid conflicts
+@router.get("/{book_id}/file")
+async def get_book_file(book_id: str):
+    """
+    Serve the PDF file for a book directly.
+    Returns the PDF file with proper headers for viewing.
+    """
+    book_service = BookService()
+    book = await book_service.get_book(book_id)
+    
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
+    if not book.file_url:
+        raise HTTPException(status_code=404, detail="Book file not found")
+    
+    # Construct the full file path
+    file_path = None
+    if book.file_url.startswith('/uploads/'):
+        # Local file path
+        file_path = os.path.join(settings.UPLOAD_DIR, book.file_url.split('/uploads/')[-1])
+    elif book.file_url.startswith('http'):
+        # Remote URL (e.g., Firebase Storage)
+        raise HTTPException(status_code=501, detail="Remote file access not supported through this endpoint. Use proxy endpoint instead.")
+    else:
+        # Assume it's a relative path
+        file_path = os.path.join(settings.UPLOAD_DIR, book.file_url)
+    
+    # Check if file exists
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail=f"File not found at {file_path}")
+    
+    # Return the PDF file
+    return FileResponse(
+        path=file_path,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{book.title}.pdf"'
+        }
+    )
 
 
 @router.get("/{book_id}", response_model=Book)
