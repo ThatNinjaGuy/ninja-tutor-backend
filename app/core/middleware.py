@@ -61,9 +61,22 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         
         # Add security headers
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        
+        # Conditionally set X-Frame-Options based on the request path
+        # Skip X-Frame-Options for API endpoints that need to be embedded
+        # (e.g., book file endpoints, PDF.js files)
+        skip_frame_options = (
+            request.url.path.startswith("/api/v1/books/") and request.url.path.endswith("/file") or
+            request.url.path.startswith("/pdfjs/")
+        )
+        
+        if not skip_frame_options:
+            # Allow iframe embedding for PDF.js viewer and API file endpoints
+            # In development, we allow same-origin embedding for all endpoints
+            # In production, you may want to restrict this further
+            response.headers["X-Frame-Options"] = "SAMEORIGIN"
         
         return response
 

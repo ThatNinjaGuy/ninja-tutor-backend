@@ -114,6 +114,7 @@ class BookService:
                     subject=book_data.get('subject', ''),
                     grade=book_data.get('grade', ''),
                     cover_url=book_data.get('cover_url'),
+                    file_url=book_data.get('file_url'),  # Include file_url for reading
                     total_pages=book_data.get('total_pages', 0),
                     progress_percentage=0.0,  # No progress for global book list
                     last_read_at=book_data.get('last_read_at'),
@@ -165,6 +166,7 @@ class BookService:
                     subject=book_data.get('subject', ''),
                     grade=book_data.get('grade', ''),
                     cover_url=book_data.get('cover_url'),
+                    file_url=book_data.get('file_url'),  # Include file_url for reading
                     total_pages=book_data.get('total_pages', 0),
                     progress_percentage=0.0,
                     last_read_at=book_data.get('last_read_at'),

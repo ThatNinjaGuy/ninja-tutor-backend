@@ -22,6 +22,37 @@ See https://github.com/adobe-type-tools/cmap-resources
 -->
 <html dir="ltr" mozdisallowselectionprint>
   <head>
+    <!-- CRITICAL: Override PDF.js validation BEFORE any PDF.js scripts load -->
+    <script>
+      // This MUST run before pdf.js or viewer.js load
+      console.log("🔧 Setting up PDF.js validation bypass...");
+
+      // Set global flag to disable origin checking
+      window.PDFJS_DISABLE_FILE_ORIGIN_CHECK = true;
+
+      // Store reference to Object.defineProperty to intercept appConfig
+      const _originalDefineProperty = Object.defineProperty;
+
+      // Intercept ALL Object.defineProperty calls to catch appConfig
+      Object.defineProperty = function (obj, prop, descriptor) {
+        // If setting appConfig, override validateFileURL
+        if (prop === "appConfig" && descriptor && descriptor.value) {
+          if (descriptor.value.validateFileURL) {
+            console.log(
+              "🎯 Intercepting validateFileURL in appConfig descriptor"
+            );
+            const original = descriptor.value.validateFileURL;
+            descriptor.value.validateFileURL = function (url) {
+              console.log("✅ validateFileURL bypassed for:", url);
+              return true;
+            };
+          }
+        }
+        return _originalDefineProperty.call(this, obj, prop, descriptor);
+      };
+
+      console.log("✅ PDF.js validation bypass installed");
+    </script>
     <meta charset="utf-8" />
     <meta
       name="viewport"
@@ -46,15 +77,57 @@ See https://github.com/adobe-type-tools/cmap-resources
       // Ensure window.pdfjsWorker is also set for viewer.js
       window.pdfjsWorkerSrc = "/pdfjs/build/pdf.worker.js";
 
-      // Disable file origin check to allow loading PDFs from backend (port 8000)
-      const originalPDFJSDef = Object.getOwnPropertyDescriptor(
-        window,
-        "PDFViewerApplicationOptions"
-      );
-      if (!originalPDFJSDef || originalPDFJSDef.configurable) {
-        window.PDFViewerApplicationOptions =
-          window.PDFViewerApplicationOptions || {};
-      }
+      // Initialize PDFViewerApplicationOptions before viewer.js loads
+      window.PDFViewerApplicationOptions =
+        window.PDFViewerApplicationOptions || {};
+
+      // Disable file origin checking completely
+      window.PDFJS_DISABLE_FILE_ORIGIN_CHECK = true;
+
+      // Set configuration to allow all file URLs
+      window.PDFViewerApplicationOptions.disableFileURL = false;
+      window.PDFViewerApplicationOptions.validateFileURL = function (url) {
+        // Explicitly allow blob URLs
+        if (url.startsWith("blob:")) {
+          console.log("✅ Blob URL allowed:", url);
+          return true;
+        }
+        // Allow all other URLs
+        console.log("✅ URL allowed:", url);
+        return true;
+      };
+
+      // CRITICAL: Prevent default PDF from loading
+      window.PDFViewerApplicationOptions.defaultUrl = "";
+      console.log("🚫 Default PDF URL disabled");
+    </script>
+    <script>
+      // Additional override script that runs IMMEDIATELY after viewer.js loads
+      // This ensures our validation override takes precedence
+      (function () {
+        const originalDefineProperty = Object.defineProperty;
+
+        // Intercept Object.defineProperty to catch when appConfig is being set
+        Object.defineProperty = function (obj, prop, descriptor) {
+          if (prop === "appConfig" && descriptor && descriptor.value) {
+            // If validateFileURL exists in descriptor, override it
+            if (descriptor.value.validateFileURL) {
+              const originalValidate = descriptor.value.validateFileURL;
+              descriptor.value.validateFileURL = function (url) {
+                console.log("🎯 Intercepted validateFileURL call for:", url);
+                return true; // Always allow
+              };
+              console.log(
+                "✅ Overrode validateFileURL in appConfig descriptor"
+              );
+            }
+          }
+          return originalDefineProperty.call(this, obj, prop, descriptor);
+        };
+
+        // Store original for later restoration if needed
+        window._originalDefineProperty = originalDefineProperty;
+      })();
     </script>
 
     <link rel="stylesheet" href="/pdfjs/web/viewer.css" />
@@ -70,9 +143,76 @@ See https://github.com/adobe-type-tools/cmap-resources
         visibility: hidden !important;
       }
     </style>
-
     <script src="/pdfjs/web/viewer.js"></script>
     <script>
+      // Additional configuration after viewer.js loads
+      document.addEventListener("webviewerloaded", function () {
+        console.log("PDF.js viewer loaded");
+
+        // Override the file validation AFTER viewer loads to always allow
+        if (
+          window.PDFViewerApplication &&
+          window.PDFViewerApplication.appConfig
+        ) {
+          // Override validateFileURL to always return true (allow all origins)
+          if (window.PDFViewerApplication.appConfig.validateFileURL) {
+            const originalValidate =
+              window.PDFViewerApplication.appConfig.validateFileURL;
+            window.PDFViewerApplication.appConfig.validateFileURL = function (
+              url
+            ) {
+              // Explicitly allow blob URLs
+              if (url.startsWith("blob:")) {
+                console.log("✅ Blob URL allowed:", url);
+                return true;
+              }
+              console.log("Allowing file from:", url);
+              return true;
+            };
+            console.log("File origin validation disabled");
+
+            // Listen for postMessage to receive PDF URL from parent window
+            console.log("👂 Setting up postMessage listener...");
+            window.addEventListener("message", function (event) {
+              console.log("📬 Message received:", event.data);
+              if (
+                event.data &&
+                event.data.type === "loadPDF" &&
+                event.data.url
+              ) {
+                console.log(
+                  "📨 Received PDF URL via postMessage:",
+                  event.data.url
+                );
+                if (window.PDFViewerApplication) {
+                  console.log("🚀 Opening PDF from postMessage");
+                  window.PDFViewerApplication.open(event.data.url);
+                } else {
+                  console.error("❌ PDFViewerApplication not available");
+                }
+              }
+            });
+            console.log("✅ postMessage listener ready");
+
+            // Get the file parameter from URL (for backward compatibility)
+            const urlParams = new URLSearchParams(window.location.search);
+            const fileUrl = urlParams.get("file");
+
+            if (fileUrl) {
+              console.log("📄 Loading PDF from URL parameter:", fileUrl);
+              setTimeout(function () {
+                console.log("🚀 Calling PDFViewerApplication.open()");
+                window.PDFViewerApplication.open(fileUrl);
+              }, 100);
+            } else {
+              console.log(
+                "⚠️ No file parameter found in URL - waiting for postMessage"
+              );
+            }
+          }
+        }
+      });
+
       // Wait for viewer to be ready before loading bridge
       if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", function () {

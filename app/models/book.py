@@ -106,6 +106,7 @@ class BookCardResponse(BaseModel):
     subject: str
     grade: str
     cover_url: Optional[str] = None
+    file_url: Optional[str] = None  # Firebase Storage URL for reading
     total_pages: int
     progress_percentage: float = 0.0
     last_read_at: Optional[datetime] = None

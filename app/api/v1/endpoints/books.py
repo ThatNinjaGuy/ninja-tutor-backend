@@ -94,39 +94,78 @@ async def get_book_file(book_id: str):
     Serve the PDF file for a book directly.
     Returns the PDF file with proper headers for viewing.
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.info(f"📚 Fetching file for book ID: {book_id}")
+    
     book_service = BookService()
     book = await book_service.get_book(book_id)
     
     if not book:
+        logger.error(f"❌ Book not found: {book_id}")
         raise HTTPException(status_code=404, detail="Book not found")
     
+    logger.info(f"📖 Book found: {book.title}")
+    logger.info(f"🔗 File URL: {book.file_url}")
+    
     if not book.file_url:
+        logger.error(f"❌ No file_url for book: {book_id}")
         raise HTTPException(status_code=404, detail="Book file not found")
     
-    # Construct the full file path
-    file_path = None
-    if book.file_url.startswith('/uploads/'):
-        # Local file path
-        file_path = os.path.join(settings.UPLOAD_DIR, book.file_url.split('/uploads/')[-1])
-    elif book.file_url.startswith('http'):
-        # Remote URL (e.g., Firebase Storage)
-        raise HTTPException(status_code=501, detail="Remote file access not supported through this endpoint. Use proxy endpoint instead.")
+    # Handle different file storage types
+    if book.file_url.startswith('http'):
+        # Remote URL (e.g., Firebase Storage) - fetch and stream to client
+        logger.info(f"🌐 Fetching from Firebase Storage: {book.file_url}")
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.get(book.file_url)
+                response.raise_for_status()
+                
+                logger.info(f"✅ Firebase fetch successful, size: {len(response.content)} bytes")
+                
+                from fastapi.responses import StreamingResponse
+                from io import BytesIO
+                
+                return StreamingResponse(
+                    BytesIO(response.content),
+                    media_type="application/pdf",
+                    headers={
+                        "Content-Disposition": f'inline; filename="{book.title}.pdf"',
+                        "Content-Length": str(len(response.content))
+                    }
+                )
+        except httpx.HTTPError as e:
+            logger.error(f"❌ Failed to fetch from Firebase: {str(e)}")
+            raise HTTPException(status_code=503, detail=f"Failed to fetch file from Firebase Storage: {str(e)}")
     else:
-        # Assume it's a relative path
-        file_path = os.path.join(settings.UPLOAD_DIR, book.file_url)
-    
-    # Check if file exists
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail=f"File not found at {file_path}")
-    
-    # Return the PDF file
-    return FileResponse(
-        path=file_path,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'inline; filename="{book.title}.pdf"'
-        }
-    )
+        # Local file path
+        logger.info(f"📁 Serving from local storage: {book.file_url}")
+        file_path = None
+        if book.file_url.startswith('/uploads/'):
+            file_path = os.path.join(settings.UPLOAD_DIR, book.file_url.split('/uploads/')[-1])
+        else:
+            # Assume it's a relative path
+            file_path = os.path.join(settings.UPLOAD_DIR, book.file_url)
+        
+        logger.info(f"📂 Resolved file path: {file_path}")
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            logger.error(f"❌ File not found at: {file_path}")
+            raise HTTPException(status_code=404, detail=f"File not found at {file_path}")
+        
+        logger.info(f"✅ File exists, serving PDF")
+        
+        # Return the PDF file
+        return FileResponse(
+            path=file_path,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'inline; filename="{book.title}.pdf"'
+            }
+        )
 
 
 @router.get("/{book_id}", response_model=Book)
