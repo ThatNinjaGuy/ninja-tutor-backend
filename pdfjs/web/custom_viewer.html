@@ -98,7 +98,11 @@ See https://github.com/adobe-type-tools/cmap-resources
       };
 
       // CRITICAL: Prevent default PDF from loading
-      window.PDFViewerApplicationOptions.defaultUrl = "";
+      // Override the default URL set in viewer.js
+      window.PDFViewerApplicationOptions.defaultUrl = {
+        value: "",
+        kind: Object,
+      };
       console.log("🚫 Default PDF URL disabled");
     </script>
     <script>
@@ -173,6 +177,10 @@ See https://github.com/adobe-type-tools/cmap-resources
 
             // Listen for postMessage to receive PDF URL from parent window
             console.log("👂 Setting up postMessage listener...");
+
+            // Track if a PDF has been loaded to prevent default PDF from loading
+            let pdfLoaded = false;
+
             window.addEventListener("message", function (event) {
               console.log("📬 Message received:", event.data);
               if (
@@ -186,6 +194,7 @@ See https://github.com/adobe-type-tools/cmap-resources
                 );
                 if (window.PDFViewerApplication) {
                   console.log("🚀 Opening PDF from postMessage");
+                  pdfLoaded = true; // Mark that a PDF has been loaded
                   window.PDFViewerApplication.open(event.data.url);
                 } else {
                   console.error("❌ PDFViewerApplication not available");
@@ -193,6 +202,21 @@ See https://github.com/adobe-type-tools/cmap-resources
               }
             });
             console.log("✅ postMessage listener ready");
+
+            // Prevent auto-loading the default PDF
+            window.PDFViewerApplicationOptions.l10n.enabled = false;
+
+            // Override the webviewerloaded event to block default PDF
+            document.addEventListener(
+              "webviewerloaded",
+              function () {
+                console.log(
+                  "📋 Viewer loaded, waiting for PDF URL via postMessage"
+                );
+                // Don't auto-open default PDF - wait for postMessage
+              },
+              { once: true }
+            );
 
             // Get the file parameter from URL (for backward compatibility)
             const urlParams = new URLSearchParams(window.location.search);
