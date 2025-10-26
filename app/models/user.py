@@ -35,6 +35,7 @@ class UserPreferences(BaseModel):
     ai_tips_enabled: bool = True
     notifications_enabled: bool = True
     sound_enabled: bool = True
+    class_grade: Optional[str] = None
 
 
 class ReadingPreferences(BaseModel):
@@ -95,6 +96,7 @@ class PreferencesUpdate(BaseModel):
     ai_tips_enabled: Optional[bool] = None
     notifications_enabled: Optional[bool] = None
     sound_enabled: Optional[bool] = None
+    class_grade: Optional[str] = None
 
 
 class ReadingPreferencesUpdate(BaseModel):

@@ -41,7 +41,10 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
 
 @router.post("/sync-user", response_model=UserResponse)
-async def sync_user(current_user_id: str = Depends(get_current_user)):
+async def sync_user(
+    request_data: dict = {},
+    current_user_id: str = Depends(get_current_user)
+):
     """Sync Firebase user with app user data"""
     from firebase_admin import auth as firebase_auth
     
@@ -56,6 +59,19 @@ async def sync_user(current_user_id: str = Depends(get_current_user)):
             email=firebase_user.email or "",
             name=firebase_user.display_name or "User"
         )
+        
+        # If class_grade is provided in request, update it
+        if 'class_grade' in request_data and request_data['class_grade']:
+            db = get_db()
+            user_doc = db.collection('users').document(current_user_id).get()
+            if user_doc.exists:
+                preferences = user_doc.to_dict().get('preferences', {})
+                preferences['class_grade'] = request_data['class_grade']
+                db.collection('users').document(current_user_id).update({
+                    'preferences': preferences
+                })
+                # Update user object
+                user.preferences.class_grade = request_data['class_grade']
         
         return UserResponse(
             id=user.id,
