@@ -224,15 +224,6 @@ class ReadingQuestionRequest(BaseModel):
     conversation_history: Optional[List[Dict[str, str]]] = []
 
 
-class QuickActionRequest(BaseModel):
-    """Request for quick action buttons (Define, Explain, Summarize)"""
-    action: str  # "define", "explain", "summarize"
-    text: str
-    book_id: str
-    page_number: int
-    summary_type: Optional[str] = "key_points"  # For summarize action
-
-
 @router.post("/reading/ask")
 async def ask_reading_question(
     request: ReadingQuestionRequest,
@@ -333,86 +324,6 @@ async def ask_reading_question(
     except Exception as e:
         logger.error(f"Error answering reading question: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing question: {str(e)}")
-
-
-@router.post("/reading/quick-action")
-async def reading_quick_action(
-    request: QuickActionRequest,
-    current_user_id: str = Depends(get_current_user)
-) -> Dict[str, Any]:
-    """
-    Handle quick action buttons: Define, Explain, or Summarize text.
-    Provides fast, focused AI responses for common reading tasks.
-    """
-    try:
-        from ....services.file_processor import FileProcessor
-        
-        logger.info(f"⚡ Quick action '{request.action}' for text: '{request.text[:50]}...'")
-        
-        # Get book information
-        book_service = BookService()
-        book = await book_service.get_book(request.book_id)
-        
-        if not book:
-            raise HTTPException(status_code=404, detail="Book not found")
-        
-        if not book.file_url:
-            raise HTTPException(status_code=400, detail="Book PDF not available")
-        
-        logger.info(f"📚 Book: {book.title}, Page: {request.page_number}")
-        
-        # Extract current page and surrounding context (3 pages total)
-        file_processor = FileProcessor()
-        start_page = max(1, request.page_number - 1)
-        end_page = min(book.total_pages, request.page_number + 1)
-        context = await file_processor.extract_text_from_pdf_pages(
-            book.file_url,
-            start_page,
-            end_page
-        )
-        
-        logger.info(f"✅ Extracted context: {len(context)} chars from pages {start_page}-{end_page}")
-        
-        # Execute the requested action
-        ai_service = AIService()
-        
-        if request.action == "define":
-            result = await ai_service.quick_define(
-                text=request.text,
-                context=context,
-                book_subject=book.subject
-            )
-        elif request.action == "explain":
-            result = await ai_service.quick_explain(
-                concept=request.text,
-                context=context,
-                difficulty_level="intermediate"
-            )
-        elif request.action == "summarize":
-            result = await ai_service.summarize_content(
-                content=context,
-                summary_type=request.summary_type or "key_points",
-                selected_text=request.text if request.text else None
-            )
-        else:
-            raise HTTPException(status_code=400, detail=f"Unknown action: {request.action}")
-        
-        # Add metadata
-        result["book_id"] = request.book_id
-        result["page_number"] = request.page_number
-        result["user_id"] = current_user_id
-        
-        logger.info(f"✅ Quick action '{request.action}' completed successfully")
-        logger.info(f"   Tokens used: {result.get('tokens_used', 'N/A')}")
-        
-        return result
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Error processing quick action '{request.action}': {str(e)}")
-        logger.exception("Full traceback:")
-        raise HTTPException(status_code=500, detail=f"Error processing action: {str(e)}")
 
 
 @router.get("/reading/page-content/{book_id}/{page_number}")
