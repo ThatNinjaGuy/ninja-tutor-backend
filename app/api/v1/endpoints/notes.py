@@ -55,7 +55,8 @@ async def create_note(
             style=note_data.style,
             tags=note_data.tags,
             ai_insights=ai_insights,
-            created_at=datetime.now()
+            created_at=datetime.now(),
+            selected_text=note_data.selected_text  # Store selected text from PDF
         )
         
         # Save to Firestore
@@ -86,7 +87,8 @@ async def create_note(
             created_at=note.created_at,
             updated_at=note.updated_at,
             is_shared=note.is_shared,
-            is_favorite=note.is_favorite
+            is_favorite=note.is_favorite,
+            selected_text=note.selected_text  # Include selected text in response
         )
         
     except Exception as e:
@@ -148,7 +150,8 @@ async def get_all_user_notes(
                     created_at=note_data.get('created_at', datetime.now()),
                     updated_at=note_data.get('updated_at'),
                     is_shared=note_data.get('is_shared', False),
-                    is_favorite=note_data.get('is_favorite', False)
+                    is_favorite=note_data.get('is_favorite', False),
+                    selected_text=note_data.get('selected_text')  # Include selected text from PDF
                 )
                 notes.append(note_response)
             except Exception as note_error:
@@ -259,7 +262,8 @@ async def get_notes_for_book(
                 created_at=note_data.get('created_at'),
                 updated_at=note_data.get('updated_at'),
                 is_shared=note_data.get('is_shared', False),
-                is_favorite=note_data.get('is_favorite', False)
+                is_favorite=note_data.get('is_favorite', False),
+                selected_text=note_data.get('selected_text')  # Include selected text from PDF
             )
             notes.append(note_response)
         
@@ -302,7 +306,8 @@ async def get_note(
             ai_insights=note_data.get('ai_insights'),
             created_at=note_data.get('created_at'),
             updated_at=note_data.get('updated_at'),
-            is_shared=note_data.get('is_shared', False)
+            is_shared=note_data.get('is_shared', False),
+            selected_text=note_data.get('selected_text')  # Include selected text from PDF
         )
         
     except Exception as e:
@@ -360,7 +365,8 @@ async def update_note(
             ai_insights=updated_data.get('ai_insights'),
             created_at=updated_data.get('created_at'),
             updated_at=updated_data.get('updated_at'),
-            is_shared=updated_data.get('is_shared', False)
+            is_shared=updated_data.get('is_shared', False),
+            selected_text=updated_data.get('selected_text')  # Include selected text from PDF
         )
         
     except Exception as e:
@@ -421,7 +427,8 @@ async def get_shared_notes(book_id: str):
                 created_at=note_data.get('created_at'),
                 updated_at=note_data.get('updated_at'),
                 is_shared=note_data.get('is_shared', False),
-                is_favorite=note_data.get('is_favorite', False)
+                is_favorite=note_data.get('is_favorite', False),
+                selected_text=note_data.get('selected_text')  # Include selected text from PDF
             )
             notes.append(note_response)
         
@@ -548,7 +555,8 @@ async def get_bookmarks_for_book(
                 created_at=note_data.get('created_at'),
                 updated_at=note_data.get('updated_at'),
                 is_shared=note_data.get('is_shared', False),
-                is_favorite=note_data.get('is_favorite', False)
+                is_favorite=note_data.get('is_favorite', False),
+                selected_text=note_data.get('selected_text')  # Include selected text from PDF
             )
             bookmarks.append(bookmark_response)
         
@@ -602,7 +610,8 @@ async def get_notes_for_page(
                     created_at=note_data.get('created_at'),
                     updated_at=note_data.get('updated_at'),
                     is_shared=note_data.get('is_shared', False),
-                    is_favorite=note_data.get('is_favorite', False)
+                    is_favorite=note_data.get('is_favorite', False),
+                    selected_text=note_data.get('selected_text')  # Include selected text from PDF
                 )
                 notes.append(note_response)
         

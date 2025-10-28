@@ -53,6 +53,7 @@ class Note(BaseModel):
     updated_at: Optional[datetime] = None
     is_shared: bool = False
     is_favorite: bool = False  # Added to match Flutter UI
+    selected_text: Optional[str] = None  # Text selected from PDF
 
     class Config:
         use_enum_values = True
@@ -66,6 +67,7 @@ class NoteCreate(BaseModel):
     position: Optional[NotePosition] = None
     style: Optional[HighlightStyle] = None
     tags: List[str] = []
+    selected_text: Optional[str] = None  # Text selected from PDF
 
 
 class NoteUpdate(BaseModel):
@@ -90,6 +92,7 @@ class NoteResponse(BaseModel):
     updated_at: Optional[datetime]
     is_shared: bool
     is_favorite: bool = False
+    selected_text: Optional[str] = None  # Text selected from PDF
 
 
 class NoteCardResponse(BaseModel):

@@ -1,5 +1,18 @@
 /* Flutter-PDF.js Bridge for Ninja Tutor */
 
+// Helper function to map normalized offset to raw text offset
+// This is complex because normalized text collapses whitespace, but raw text doesn't
+// For now, return the offset as-is since we're using Range on text nodes directly
+// The issue is that the normalized and raw offsets need to align
+function findRawOffset(normalizedText, normalizedOffset) {
+  // Simple approach: if normalizedOffset is within bounds, return it
+  // The real complexity comes from the fact that normalized and raw might have different lengths
+  if (normalizedOffset < normalizedText.length) {
+    return normalizedOffset;
+  }
+  return normalizedText.length;
+}
+
 // Global variables for tracking
 let currentPage = 1;
 let pageStartTime = Date.now();
@@ -9,6 +22,9 @@ let idleTimeout = null;
 let isIdle = false;
 let selectedText = "";
 let selectedTextPosition = null;
+let bookNotes = []; // Notes for current book
+let tooltipTimeout = null; // Timeout for showing tooltip
+let highlightTimeout = null; // Timeout for applying highlights
 
 // Flutter communication
 function sendToFlutter(type, data) {
@@ -32,6 +48,25 @@ window.addEventListener("message", function (event) {
   console.log("Received from Flutter:", message);
 
   switch (message.type) {
+    case "loadPDF":
+      // Load PDF from blob URL or regular URL
+      if (message.url && window.PDFViewerApplication) {
+        console.log("📨 Loading PDF from URL:", message.url);
+        // Use new API signature with object parameter
+        window.PDFViewerApplication.open({ url: message.url })
+          .then(() => {
+            console.log("✅ PDF loaded successfully");
+          })
+          .catch((error) => {
+            console.error("❌ Failed to load PDF:", error);
+          });
+      } else {
+        console.error(
+          "❌ Cannot load PDF: missing URL or PDFViewerApplication not ready"
+        );
+      }
+      break;
+
     case "goToPage":
       if (
         window.PDFViewerApplication &&
@@ -61,19 +96,24 @@ window.addEventListener("message", function (event) {
       sendToFlutter("highlightModeChanged", { enabled: highlightMode });
       break;
 
-    case "setScrollEnabled":
-      // Enable or disable scrolling in the PDF viewer
-      const container = document.getElementById("viewerContainer");
-      if (container) {
-        if (message.enabled) {
-          container.style.overflow = "auto";
-          container.style.pointerEvents = "auto";
-          console.log("✅ PDF scrolling enabled");
-        } else {
-          container.style.overflow = "hidden";
-          container.style.pointerEvents = "none";
-          console.log("🚫 PDF scrolling disabled");
-        }
+    case "displayNotes":
+      // Store notes and highlight them on current page
+      console.log("📝 displayNotes message received!");
+      console.log("Message notes:", JSON.stringify(message.notes));
+      if (message.notes && Array.isArray(message.notes)) {
+        bookNotes = message.notes;
+        console.log(
+          `📝 Stored ${bookNotes.length} notes. Current page: ${currentPage}`
+        );
+        console.log("Sample note:", JSON.stringify(bookNotes[0]));
+        // Apply highlights after a short delay to ensure page is rendered
+        if (highlightTimeout) clearTimeout(highlightTimeout);
+        highlightTimeout = setTimeout(() => {
+          console.log(`⏰ Highlight timeout triggered for page ${currentPage}`);
+          highlightNotesOnPage(currentPage);
+        }, 2000);
+      } else {
+        console.error("❌ displayNotes: invalid notes array", message.notes);
       }
       break;
   }
@@ -81,24 +121,33 @@ window.addEventListener("message", function (event) {
 
 // Page change tracking
 function onPageChange(pageNum) {
+  console.log(`🔄 onPageChange called: page ${currentPage} → ${pageNum}`);
+
   const timeSpent = Date.now() - pageStartTime;
   totalTimeSpent += timeSpent;
+  activeTimeSpent += isIdle ? timeSpent : timeSpent;
 
-  if (!isIdle) {
-    activeTimeSpent += timeSpent;
-  }
-
-  // Send time data to Flutter
-  sendToFlutter("pageChange", {
+  const pageChangeData = {
     previousPage: currentPage,
     newPage: pageNum,
     timeSpent: Math.round(timeSpent / 1000), // Convert to seconds
     totalTimeSpent: Math.round(totalTimeSpent / 1000),
     activeTimeSpent: Math.round(activeTimeSpent / 1000),
-  });
+  };
+
+  console.log("📤 Sending pageChange to Flutter:", pageChangeData);
+  sendToFlutter("pageChange", pageChangeData);
 
   currentPage = pageNum;
   pageStartTime = Date.now();
+
+  // Highlight notes on new page
+  if (bookNotes.length > 0) {
+    if (highlightTimeout) clearTimeout(highlightTimeout);
+    highlightTimeout = setTimeout(() => {
+      highlightNotesOnPage(pageNum);
+    }, 1000);
+  }
 }
 
 // Idle detection
@@ -106,49 +155,34 @@ function resetIdleTimer() {
   if (idleTimeout) {
     clearTimeout(idleTimeout);
   }
-
-  const wasIdle = isIdle;
   isIdle = false;
-
-  if (wasIdle) {
-    sendToFlutter("idleStateChange", { isIdle: false });
-  }
-
-  // Set idle after 10 seconds of no interaction
   idleTimeout = setTimeout(() => {
     isIdle = true;
     sendToFlutter("idleStateChange", { isIdle: true });
   }, 10000);
 }
 
-// Text selection tracking with page coordinates
+// Text selection tracking
 function onTextSelection() {
   const selection = window.getSelection();
   selectedText = selection.toString().trim();
 
   if (selectedText) {
-    // Get selection position (viewport coordinates)
+    // Get selection position
     const range = selection.getRangeAt(0);
     const rect = range.getBoundingClientRect();
 
-    // Try to get PDF page coordinates
-    const pageCoordinates = getPdfPageCoordinates(rect);
-
     selectedTextPosition = {
-      // Viewport coordinates
-      viewportX: rect.left,
-      viewportY: rect.top,
+      x: rect.left,
+      y: rect.top,
       width: rect.width,
       height: rect.height,
-      // PDF page coordinates (if available)
-      ...pageCoordinates,
     };
 
     sendToFlutter("textSelection", {
       text: selectedText,
       page: currentPage,
       position: selectedTextPosition,
-      charCount: selectedText.length,
     });
   } else {
     selectedText = "";
@@ -158,49 +192,6 @@ function onTextSelection() {
       page: currentPage,
       position: null,
     });
-  }
-}
-
-// Convert viewport coordinates to PDF page coordinates
-function getPdfPageCoordinates(rect) {
-  try {
-    if (
-      !window.PDFViewerApplication ||
-      !window.PDFViewerApplication.pdfViewer
-    ) {
-      return {};
-    }
-
-    const viewer = window.PDFViewerApplication.pdfViewer;
-    const page = viewer.getPageView(currentPage - 1); // 0-indexed
-
-    if (!page || !page.viewport) {
-      return {};
-    }
-
-    // Get page container position
-    const pageElement = page.div;
-    const pageRect = pageElement.getBoundingClientRect();
-
-    // Calculate relative position within the page
-    const relativeX = rect.left - pageRect.left;
-    const relativeY = rect.top - pageRect.top;
-
-    // Convert to PDF coordinates (PDF origin is bottom-left)
-    const viewport = page.viewport;
-    const pdfX = relativeX / viewport.scale;
-    const pdfY = (pageRect.height - relativeY) / viewport.scale;
-
-    return {
-      pdfX: Math.round(pdfX),
-      pdfY: Math.round(pdfY),
-      pdfWidth: Math.round(rect.width / viewport.scale),
-      pdfHeight: Math.round(rect.height / viewport.scale),
-      scale: viewport.scale,
-    };
-  } catch (error) {
-    console.error("Error getting PDF coordinates:", error);
-    return {};
   }
 }
 
@@ -215,276 +206,341 @@ function createHighlight(text, color = "yellow") {
     page: currentPage,
     color: color,
     position: selectedTextPosition,
+    timestamp: Date.now(),
+  });
+}
+
+// Highlight notes on current page
+function highlightNotesOnPage(pageNum) {
+  console.log(`🎨 Highlighting notes on page ${pageNum}`);
+
+  // Get notes for this page
+  const pageNotes = bookNotes.filter((note) => note.page === pageNum);
+
+  if (pageNotes.length === 0) {
+    console.log("No notes found for this page");
+    return;
+  }
+
+  console.log(`Found ${pageNotes.length} notes for page ${pageNum}`);
+
+  // Find all text layers and get the one for the current page
+  const allTextLayers = document.querySelectorAll(".textLayer");
+  console.log(`Found ${allTextLayers.length} text layers`);
+
+  // PDF.js creates text layers with data-page-number attributes
+  const textLayer =
+    document.querySelector(`.textLayer[data-page-number="${pageNum}"]`) ||
+    document.querySelector(".textLayer");
+
+  if (!textLayer) {
+    console.warn("Text layer not found, will retry after page renders");
+    console.log(
+      "Available text layers:",
+      Array.from(document.querySelectorAll(".textLayer")).map((el) => ({
+        page: el.getAttribute("data-page-number"),
+        text: el.textContent?.substring(0, 100),
+      }))
+    );
+    setTimeout(() => highlightNotesOnPage(pageNum), 1000);
+    return;
+  }
+
+  console.log(
+    `Found text layer for page ${pageNum}, searching for ${pageNotes.length} notes`
+  );
+
+  // Check if text nodes exist
+  const allTextNodes = [];
+  const walker = document.createTreeWalker(
+    textLayer,
+    NodeFilter.SHOW_TEXT,
+    null,
+    false
+  );
+  let node;
+  while ((node = walker.nextNode())) {
+    allTextNodes.push(node);
+  }
+
+  console.log(`Found ${allTextNodes.length} text nodes`);
+
+  // If no text nodes, text layer hasn't rendered yet - retry
+  if (allTextNodes.length === 0) {
+    console.warn(`⚠️ No text nodes found yet, retrying in 500ms...`);
+    setTimeout(() => highlightNotesOnPage(pageNum), 500);
+    return;
+  }
+
+  // Remove any existing highlights for this page to avoid duplicates
+  const existingHighlights = textLayer.querySelectorAll(".note-highlight");
+  console.log(
+    `Found ${existingHighlights.length} existing highlights to clean up`
+  );
+  existingHighlights.forEach((h) => {
+    // Unwrap the highlight but keep the text
+    const parent = h.parentNode;
+    while (h.firstChild) {
+      parent.insertBefore(h.firstChild, h);
+    }
+    parent.removeChild(h);
   });
 
-  // Clear selection
-  window.getSelection().removeAllRanges();
-  selectedText = "";
-  selectedTextPosition = null;
-}
-
-// Track existing annotations on a page
-function trackAnnotations(pageNumber) {
-  try {
-    const viewer = window.PDFViewerApplication.pdfViewer;
-    const pageView = viewer.getPageView(pageNumber - 1);
-
-    if (!pageView || !pageView.annotationLayer) {
+  pageNotes.forEach((note, index) => {
+    if (!note.selectedText) {
+      console.log(`Note ${index} has no selectedText`);
       return;
     }
 
-    // Get all annotation elements
-    const annotationElements = pageView.annotationLayer.div.querySelectorAll(
-      ".annotationLayer > section"
-    );
-
-    console.log(
-      `Found ${annotationElements.length} annotations on page ${pageNumber}`
-    );
-  } catch (error) {
-    console.error("Error tracking annotations:", error);
-  }
-}
-
-// Capture editor annotations (drawings, text added by user)
-function captureEditorAnnotations(pageNumber) {
-  try {
-    const viewer = window.PDFViewerApplication.pdfViewer;
-    const pageView = viewer.getPageView(pageNumber - 1);
-
-    if (!pageView || !pageView.annotationEditorLayer) {
+    // Normalize whitespace in search text (replace multiple spaces/newlines with single space)
+    const searchText = note.selectedText.trim().replace(/\s+/g, " ");
+    if (!searchText) {
+      console.log(`Note ${index} searchText is empty`);
       return;
     }
 
-    // Get all editor annotations
-    const editorLayer = pageView.annotationEditorLayer.div;
-    const editors = editorLayer.querySelectorAll(
-      ".annotationEditorLayer > div"
-    );
+    console.log(`Searching for: "${searchText.substring(0, 50)}..."`);
+    console.log(`Search text length: ${searchText.length}`);
+    console.log(`Using ${allTextNodes.length} text nodes`);
 
-    editors.forEach((editor) => {
-      captureAnnotationData(editor, pageNumber);
-    });
-  } catch (error) {
-    console.error("Error capturing editor annotations:", error);
-  }
-}
+    // Build both normalized and original text with node positions
+    let fullText = "";
+    let normalizedFullText = "";
+    let nodePositions = [];
 
-// Capture data from a specific annotation element
-function captureAnnotationData(element, pageNumber) {
-  try {
-    const annotationType =
-      element.getAttribute("data-editor-type") || "unknown";
-    const rect = element.getBoundingClientRect();
-    const pageCoordinates = getPdfPageCoordinates(rect);
+    for (const textNode of allTextNodes) {
+      const rawText = textNode.textContent;
+      const normalizedText = rawText.replace(/\s+/g, " ");
 
-    let annotationData = {
-      type: annotationType,
-      page: pageNumber,
-      position: {
-        viewportX: rect.left,
-        viewportY: rect.top,
-        width: rect.width,
-        height: rect.height,
-        ...pageCoordinates,
-      },
-      timestamp: Date.now(),
-    };
+      const rawStart = fullText.length;
+      const normalizedStart = normalizedFullText.length;
 
-    // Extract annotation-specific data
-    if (annotationType === "freetext") {
-      // Text annotation
-      const textElement = element.querySelector(".internal");
-      annotationData.text = textElement ? textElement.textContent : "";
-      annotationData.fontSize = window.getComputedStyle(
-        textElement || element
-      ).fontSize;
-      annotationData.color = window.getComputedStyle(element).color;
-    } else if (annotationType === "ink") {
-      // Drawing/ink annotation
-      const canvas = element.querySelector("canvas");
-      if (canvas) {
-        annotationData.drawingData = canvas.toDataURL("image/png");
-        annotationData.width = canvas.width;
-        annotationData.height = canvas.height;
-      }
-    } else if (annotationType === "highlight") {
-      // Highlight annotation
-      annotationData.color = window.getComputedStyle(element).backgroundColor;
-    }
+      fullText += rawText;
+      normalizedFullText += normalizedText;
 
-    sendToFlutter("annotation", annotationData);
-    console.log("Captured annotation:", annotationType, "on page", pageNumber);
-  } catch (error) {
-    console.error("Error capturing annotation data:", error);
-  }
-}
+      const rawEnd = fullText.length;
+      const normalizedEnd = normalizedFullText.length;
 
-// Capture all annotations from all pages
-function captureAllAnnotations() {
-  try {
-    if (
-      !window.PDFViewerApplication ||
-      !window.PDFViewerApplication.pdfViewer
-    ) {
-      // Only log if this is unexpected
-      return;
-    }
-
-    const viewer = window.PDFViewerApplication.pdfViewer;
-    let totalAnnotations = 0;
-
-    // Loop through all rendered pages
-    for (let i = 0; i < viewer._pages.length; i++) {
-      const pageView = viewer._pages[i];
-
-      if (!pageView) {
-        continue;
-      }
-
-      // Check for annotation editor layer (silently skip if not present)
-      if (!pageView.annotationEditorLayer) {
-        continue;
-      }
-
-      const editorLayer = pageView.annotationEditorLayer.div;
-      if (!editorLayer) {
-        continue;
-      }
-
-      // Look for various annotation element patterns
-      const editors = editorLayer.querySelectorAll(
-        'section, div[class*="Editor"], *[data-editor-rotation]'
-      );
-
-      // Only log if we actually found annotations
-      if (editors.length === 0) {
-        continue;
-      }
-
-      console.log(`📝 Page ${i + 1}: Found ${editors.length} annotations`);
-
-      editors.forEach((editor, idx) => {
-        const alreadySent = editor.getAttribute("data-sent-to-flutter");
-
-        // Only process new annotations
-        if (alreadySent) {
-          return; // Skip already sent annotations silently
-        }
-
-        // Determine annotation type from class or data attributes
-        let annotationType = editor.getAttribute("data-editor-type");
-        if (!annotationType) {
-          if (editor.className.includes("freeText"))
-            annotationType = "freetext";
-          else if (editor.className.includes("ink")) annotationType = "ink";
-          else annotationType = "unknown";
-        }
-
-        const id =
-          editor.getAttribute("data-annotation-id") ||
-          `${Date.now()}-${Math.random()}`;
-
-        // Log and capture new annotation
-        console.log(`✨ NEW ANNOTATION: type=${annotationType}, page=${i + 1}`);
-        editor.setAttribute("data-sent-to-flutter", "true");
-        editor.setAttribute("data-annotation-id", id);
-        captureAnnotationData(editor, i + 1);
-        totalAnnotations++;
+      nodePositions.push({
+        node: textNode,
+        rawStart,
+        rawEnd,
+        normalizedStart,
+        normalizedEnd,
       });
     }
 
-    if (totalAnnotations > 0) {
-      console.log(`✅ Captured ${totalAnnotations} new annotations`);
+    const textIndex = normalizedFullText.indexOf(searchText);
+    console.log(`Text found at index: ${textIndex}`);
+
+    // Try to find exact match, if not found, try fuzzy match
+    let matchIndex = textIndex;
+    let matchText = searchText;
+
+    if (textIndex === -1) {
+      console.warn(
+        `Text not found in full text: "${searchText.substring(0, 30)}..."`
+      );
+      console.log(
+        `Full text preview: "${normalizedFullText.substring(0, 200)}..."`
+      );
+      console.log(`Attempting fuzzy match...`);
+
+      // Try fuzzy match - search for first few words
+      const searchWords = searchText.split(" ").filter((w) => w.length > 3);
+      if (searchWords.length > 0) {
+        const fuzzySearch = searchWords
+          .slice(0, Math.min(3, searchWords.length))
+          .join(" ");
+        const fuzzyIndex = normalizedFullText.indexOf(fuzzySearch);
+        if (fuzzyIndex !== -1) {
+          console.log(`✅ Found fuzzy match at index: ${fuzzyIndex}`);
+          matchIndex = fuzzyIndex;
+          matchText = fuzzySearch; // Use shorter match text
+        } else {
+          console.log(`❌ No match found even with fuzzy search`);
+          return;
+        }
+      } else {
+        console.log(`❌ No words long enough for fuzzy matching`);
+        return;
+      }
     }
-  } catch (error) {
-    console.error("❌ Error capturing annotations:", error);
-    console.error(error.stack);
-  }
+
+    // Find which text node contains the start of our match in normalized text
+    for (const {
+      node: textNode,
+      normalizedStart,
+      normalizedEnd,
+      rawStart,
+    } of nodePositions) {
+      if (matchIndex >= normalizedStart && matchIndex < normalizedEnd) {
+        // This node contains our text in the normalized version
+        const normalizedOffset = matchIndex - normalizedStart;
+
+        // Map back to raw text position
+        const rawText = textNode.textContent;
+        const normalizedText = rawText.replace(/\s+/g, " ");
+        const rawOffset = findRawOffset(normalizedText, normalizedOffset);
+
+        console.log(
+          `Found in node at normalized offset ${normalizedOffset}, raw offset ${rawOffset}, match length: ${matchText.length}`
+        );
+        console.log(`   Raw text node length: ${rawText.length}`);
+        console.log(`   Normalized text node length: ${normalizedText.length}`);
+        console.log(`   Match text: "${matchText}"`);
+        console.log(`   Raw text: "${rawText.substring(0, 100)}..."`);
+
+        // Create range using raw offset
+        try {
+          const range = document.createRange();
+          range.setStart(textNode, rawOffset);
+
+          // Calculate end offset - use matchText length since we're dealing with the actual node text
+          const rawEndOffset = Math.min(
+            rawOffset + matchText.length,
+            rawText.length
+          );
+          console.log(
+            `   Setting range: start=${rawOffset}, end=${rawEndOffset} (match length: ${matchText.length}, text node length: ${rawText.length})`
+          );
+          range.setEnd(textNode, rawEndOffset);
+
+          const span = document.createElement("span");
+          span.className = "note-highlight";
+          span.setAttribute("data-note-id", note.id);
+          // Use !important to override PDF.js styles
+          span.style.setProperty("background-color", "rgba(255, 235, 59, 0.6)", "important");
+          span.style.setProperty("cursor", "pointer", "important");
+          span.style.setProperty("border-bottom", "2px solid #fbc02d", "important");
+          span.style.setProperty("display", "inline-block", "important");
+
+          range.surroundContents(span);
+
+          // Verify the span was added to the DOM
+          const addedSpan = textLayer.querySelector(
+            `[data-note-id="${note.id}"]`
+          );
+          if (addedSpan) {
+            console.log(
+              `✅ Highlight created and verified in DOM for note ${index}`
+            );
+            console.log(`   Highlighted text: "${addedSpan.textContent}"`);
+
+            // Add event listeners
+            span.addEventListener("click", (e) => {
+              e.stopPropagation();
+              sendToFlutter("noteClicked", {
+                noteId: note.id,
+                page: pageNum,
+              });
+            });
+
+            span.addEventListener("mouseenter", () =>
+              showNoteTooltip(note, span)
+            );
+            span.addEventListener("mouseleave", () => hideNoteTooltip());
+          } else {
+            console.error(
+              `❌ Highlight created but not found in DOM for note ${index}`
+            );
+          }
+
+          break;
+        } catch (e) {
+          console.error(`❌ Error creating highlight for note ${index}:`, e);
+          console.error(`   Error message:`, e.message);
+          console.error(`   Stack:`, e.stack);
+        }
+      }
+    }
+  });
 }
 
-// Initialize when PDF.js is ready
+// Show tooltip on hover
+function showNoteTooltip(note, element) {
+  if (tooltipTimeout) clearTimeout(tooltipTimeout);
+
+  tooltipTimeout = setTimeout(() => {
+    const rect = element.getBoundingClientRect();
+    const tooltip = document.createElement("div");
+    tooltip.className = "note-tooltip";
+    tooltip.style.cssText =
+      "position: fixed; background: white; border: 1px solid #ccc; padding: 8px 12px; border-radius: 4px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2); z-index: 10000; max-width: 250px; font-size: 13px;";
+    tooltip.innerHTML = `
+      <div style="font-weight: bold; margin-bottom: 4px;">${(
+        note.title || "Untitled Note"
+      )
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")}</div>
+      <div style="font-size: 0.9em; color: #666;">${note.content
+        .substring(0, 100)
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")}${note.content.length > 100 ? "..." : ""}</div>
+    `;
+    tooltip.style.left = rect.right + 10 + "px";
+    tooltip.style.top = rect.top + "px";
+    document.body.appendChild(tooltip);
+  }, 500);
+}
+
+// Hide tooltip
+function hideNoteTooltip() {
+  if (tooltipTimeout) clearTimeout(tooltipTimeout);
+  const tooltip = document.querySelector(".note-tooltip");
+  if (tooltip) tooltip.remove();
+}
+
+// Track if PDF.js event listeners are set up
+let pdfEventListenersSetup = false;
+
+// Initialize Flutter bridge
 function initializeFlutterBridge() {
   console.log("Initializing Flutter Bridge...");
 
-  // Wait for PDF.js to be ready
-  if (window.PDFViewerApplication && window.PDFViewerApplication.eventBus) {
-    setupEventListeners();
-  } else {
-    // Wait for PDF.js to load - check multiple times
-    let attempts = 0;
-    const maxAttempts = 20;
-    const checkInterval = setInterval(() => {
-      attempts++;
-      if (window.PDFViewerApplication && window.PDFViewerApplication.eventBus) {
-        clearInterval(checkInterval);
-        setupEventListeners();
-      } else if (attempts >= maxAttempts) {
-        clearInterval(checkInterval);
-        console.error("PDF.js did not initialize in time");
+  // User interaction events for idle detection (only set up once)
+  if (!pdfEventListenersSetup) {
+    ["mousedown", "mousemove", "keypress", "scroll", "touchstart"].forEach(
+      (event) => {
+        document.addEventListener(event, resetIdleTimer, true);
       }
-    }, 500);
+    );
+
+    // Text selection events
+    document.addEventListener("mouseup", onTextSelection);
+    document.addEventListener("selectionchange", onTextSelection);
   }
-}
 
-function setupEventListeners() {
-  console.log("Setting up event listeners...");
+  // Try to set up PDF.js events if available, but don't fail if not ready yet
+  if (
+    window.PDFViewerApplication &&
+    window.PDFViewerApplication.eventBus &&
+    !pdfEventListenersSetup
+  ) {
+    const eventBus = window.PDFViewerApplication.eventBus;
 
-  // Page change events
-  if (window.PDFViewerApplication && window.PDFViewerApplication.eventBus) {
     try {
-      const eventBus = window.PDFViewerApplication.eventBus;
-
-      eventBus.on("pagechanging", (evt) => {
+      // Page change event
+      eventBus.on("pagechanging", function (evt) {
+        console.log(
+          `📄 PDF.js page changing from ${currentPage} to ${evt.pageNumber}`
+        );
         onPageChange(evt.pageNumber);
       });
-
-      // Annotation events
-      eventBus.on("annotationlayerrendered", (evt) => {
-        console.log("Annotation layer rendered for page", evt.pageNumber);
-        trackAnnotations(evt.pageNumber);
-      });
-
-      // Listen for annotation editor events (drawing, text)
-      if (window.PDFViewerApplication.pdfViewer) {
-        const viewer = window.PDFViewerApplication.pdfViewer;
-
-        // Monitor for annotation changes
-        eventBus.on("annotationeditorlayerrendered", (evt) => {
-          console.log(
-            "Annotation editor layer rendered for page",
-            evt.pageNumber
-          );
-          captureEditorAnnotations(evt.pageNumber);
-        });
-      }
 
       // Initial page
       currentPage = window.PDFViewerApplication.page || 1;
       pageStartTime = Date.now();
 
-      console.log("Event listeners set up successfully");
+      console.log("✅ Event listeners set up successfully");
+      pdfEventListenersSetup = true;
     } catch (error) {
-      console.error("Error setting up event listeners:", error);
+      console.error("❌ Error setting up event listeners:", error);
     }
-  } else {
-    console.error("PDFViewerApplication or eventBus not available");
-    return;
+  } else if (!pdfEventListenersSetup) {
+    console.log("⏳ PDFViewerApplication not ready, retrying in 500ms");
+    setTimeout(initializeFlutterBridge, 500);
   }
-
-  // User interaction events for idle detection
-  ["mousedown", "mousemove", "keypress", "scroll", "touchstart"].forEach(
-    (event) => {
-      document.addEventListener(event, resetIdleTimer, true);
-    }
-  );
-
-  // Text selection events
-  document.addEventListener("mouseup", onTextSelection);
-  document.addEventListener("selectionchange", onTextSelection);
-
-  // Monitor for annotation changes periodically
-  setInterval(captureAllAnnotations, 2000); // Check every 2 seconds
 
   // Initialize idle timer
   resetIdleTimer();
@@ -496,41 +552,6 @@ function setupEventListeners() {
       : 0,
     currentPage: currentPage,
   });
-
-  // Diagnostic logging (reduced verbosity)
-  console.log("✅ PDF Bridge initialized - ready to capture annotations");
-
-  // Debug mode can be enabled by setting window.DEBUG_PDF_BRIDGE = true
-  if (window.DEBUG_PDF_BRIDGE) {
-    console.log("📚 ===== PDF Annotation Capture System =====");
-    console.log(`📄 Total pages: ${window.PDFViewerApplication.pagesCount}`);
-    console.log(`📍 Current page: ${currentPage}`);
-    console.log("🔄 Checking for annotations every 2 seconds...");
-    console.log("==========================================");
-
-    // Check if annotation mode is available
-    setTimeout(() => {
-      const viewer = window.PDFViewerApplication.pdfViewer;
-      console.log("🔍 PDF.js Editor Mode Status:");
-      console.log(
-        "   annotationEditorMode:",
-        window.PDFViewerApplication.pdfViewer.annotationEditorMode
-      );
-      console.log(
-        "   annotationEditorParams:",
-        window.PDFViewerApplication.annotationEditorParams
-      );
-
-      // List all pages and their editor layers
-      viewer._pages.forEach((page, idx) => {
-        if (page.annotationEditorLayer) {
-          console.log(`   Page ${idx + 1}: annotationEditorLayer EXISTS ✅`);
-        } else {
-          console.log(`   Page ${idx + 1}: annotationEditorLayer MISSING ❌`);
-        }
-      });
-    }, 3000);
-  }
 }
 
 // Global functions for external access
@@ -539,12 +560,20 @@ window.FlutterBridge = {
   sendToFlutter: sendToFlutter,
   onPageChange: onPageChange,
   onTextSelection: onTextSelection,
+  highlightNotesOnPage: highlightNotesOnPage,
 };
 
 // Start initialization
 initializeFlutterBridge();
 
 // Also try when window loads
-window.addEventListener("load", () => {
-  setTimeout(setupEventListeners, 500);
+window.addEventListener("load", function () {
+  console.log("Window loaded, re-initializing Flutter Bridge");
+  initializeFlutterBridge();
+});
+
+// Listen for PDF.js viewer ready event
+window.addEventListener("webviewerloaded", function () {
+  console.log("PDF.js viewer loaded, initializing Flutter Bridge");
+  initializeFlutterBridge();
 });

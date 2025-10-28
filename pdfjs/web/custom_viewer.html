@@ -132,6 +132,9 @@ See https://github.com/adobe-type-tools/cmap-resources
         // Store original for later restoration if needed
         window._originalDefineProperty = originalDefineProperty;
       })();
+
+      // Prevent viewer from auto-opening default PDF on load
+      console.log("📋 Viewer will wait for PDF URL via postMessage");
     </script>
 
     <link rel="stylesheet" href="/pdfjs/web/viewer.css" />
@@ -146,94 +149,121 @@ See https://github.com/adobe-type-tools/cmap-resources
         display: none !important;
         visibility: hidden !important;
       }
+      
+      /* Note highlighting styles */
+      .note-highlight {
+        background-color: rgba(255, 235, 59, 0.4);
+        cursor: pointer;
+        position: relative;
+        border-bottom: 2px solid #FBC02D;
+        transition: background-color 0.2s;
+      }
+      
+      .note-highlight:hover {
+        background-color: rgba(255, 235, 59, 0.6);
+      }
+      
+      .note-tooltip {
+        position: fixed;
+        background: white;
+        border: 1px solid #ccc;
+        padding: 8px 12px;
+        border-radius: 4px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        z-index: 1000;
+        max-width: 250px;
+        font-size: 13px;
+      }
     </style>
+
     <script src="/pdfjs/web/viewer.js"></script>
     <script>
       // Additional configuration after viewer.js loads
       document.addEventListener("webviewerloaded", function () {
         console.log("PDF.js viewer loaded");
 
-        // Override the file validation AFTER viewer loads to always allow
+        // Override the file validation AFTER viewer loads
         if (
           window.PDFViewerApplication &&
           window.PDFViewerApplication.appConfig
         ) {
-          // Override validateFileURL to always return true (allow all origins)
-          if (window.PDFViewerApplication.appConfig.validateFileURL) {
-            const originalValidate =
-              window.PDFViewerApplication.appConfig.validateFileURL;
-            window.PDFViewerApplication.appConfig.validateFileURL = function (
-              url
-            ) {
-              // Explicitly allow blob URLs
-              if (url.startsWith("blob:")) {
-                console.log("✅ Blob URL allowed:", url);
+          console.log(
+            "✅ PDFViewerApplication.appConfig found, overriding validateFileURL"
+          );
+
+          // Override validateFileURL to always return true
+          Object.defineProperty(
+            window.PDFViewerApplication.appConfig,
+            "validateFileURL",
+            {
+              value: function (url) {
+                console.log("🎯 Bypassing file origin validation for:", url);
                 return true;
-              }
-              console.log("Allowing file from:", url);
-              return true;
-            };
-            console.log("File origin validation disabled");
-
-            // Listen for postMessage to receive PDF URL from parent window
-            console.log("👂 Setting up postMessage listener...");
-
-            // Track if a PDF has been loaded to prevent default PDF from loading
-            let pdfLoaded = false;
-
-            window.addEventListener("message", function (event) {
-              console.log("📬 Message received:", event.data);
-              if (
-                event.data &&
-                event.data.type === "loadPDF" &&
-                event.data.url
-              ) {
-                console.log(
-                  "📨 Received PDF URL via postMessage:",
-                  event.data.url
-                );
-                if (window.PDFViewerApplication) {
-                  console.log("🚀 Opening PDF from postMessage");
-                  pdfLoaded = true; // Mark that a PDF has been loaded
-                  window.PDFViewerApplication.open(event.data.url);
-                } else {
-                  console.error("❌ PDFViewerApplication not available");
-                }
-              }
-            });
-            console.log("✅ postMessage listener ready");
-
-            // Prevent auto-loading the default PDF
-            window.PDFViewerApplicationOptions.l10n.enabled = false;
-
-            // Override the webviewerloaded event to block default PDF
-            document.addEventListener(
-              "webviewerloaded",
-              function () {
-                console.log(
-                  "📋 Viewer loaded, waiting for PDF URL via postMessage"
-                );
-                // Don't auto-open default PDF - wait for postMessage
               },
-              { once: true }
-            );
-
-            // Get the file parameter from URL (for backward compatibility)
-            const urlParams = new URLSearchParams(window.location.search);
-            const fileUrl = urlParams.get("file");
-
-            if (fileUrl) {
-              console.log("📄 Loading PDF from URL parameter:", fileUrl);
-              setTimeout(function () {
-                console.log("🚀 Calling PDFViewerApplication.open()");
-                window.PDFViewerApplication.open(fileUrl);
-              }, 100);
-            } else {
-              console.log(
-                "⚠️ No file parameter found in URL - waiting for postMessage"
-              );
+              writable: true,
+              configurable: true,
             }
+          );
+
+          console.log("✅ File origin validation overridden");
+
+          // Listen for postMessage to receive PDF URL from parent window
+          console.log("👂 Setting up postMessage listener...");
+
+          // Track if a PDF has been loaded to prevent default PDF from loading
+          let pdfLoaded = false;
+
+          window.addEventListener("message", function (event) {
+            console.log("📬 Message received:", event.data);
+            if (event.data && event.data.type === "loadPDF" && event.data.url) {
+              console.log(
+                "📨 Received PDF URL via postMessage:",
+                event.data.url
+              );
+              if (window.PDFViewerApplication) {
+                console.log("🚀 Opening PDF from postMessage");
+                pdfLoaded = true; // Mark that a PDF has been loaded
+                window.PDFViewerApplication.open(event.data.url);
+              } else {
+                console.error("❌ PDFViewerApplication not available");
+              }
+            }
+          });
+          console.log("✅ postMessage listener ready");
+
+          // Prevent auto-loading the default PDF
+          window.PDFViewerApplicationOptions.l10n.enabled = false;
+
+          // Override the webviewerloaded event to block default PDF
+          document.addEventListener(
+            "webviewerloaded",
+            function () {
+              console.log(
+                "📋 Viewer loaded, waiting for PDF URL via postMessage"
+              );
+              // Don't auto-open default PDF - wait for postMessage
+            },
+            { once: true }
+          );
+
+          // Get the file parameter from URL (for backward compatibility)
+          const urlParams = new URLSearchParams(window.location.search);
+          const fileUrl = urlParams.get("file");
+
+          if (fileUrl) {
+            console.log("📄 Loading PDF from URL parameter:", fileUrl);
+            // Wait a moment to ensure viewer is fully ready, then open the PDF file
+            setTimeout(function () {
+              console.log("🚀 Calling PDFViewerApplication.open()");
+              window.PDFViewerApplication.open(fileUrl);
+            }, 100);
+          } else {
+            console.log(
+              "⚠️ No file parameter found in URL - waiting for postMessage"
+            );
           }
+        } else {
+          console.log("❌ PDFViewerApplication or appConfig not found");
         }
       });
 
