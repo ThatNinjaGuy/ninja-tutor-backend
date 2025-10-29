@@ -208,3 +208,13 @@ logs/
 # Temporary files
 temp/
 tmp/
+
+# Environment and secrets - DO NOT COMMIT
+set-env-vars.sh
+*.env
+.env.*
+!*.example.env
+!.env.example
+secrets/
+.secrets/
+*.secret
