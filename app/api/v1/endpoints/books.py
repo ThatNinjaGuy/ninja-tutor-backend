@@ -71,19 +71,46 @@ async def get_books(
     limit: int = 20,
     offset: int = 0,
     subject: Optional[str] = None,
-    grade: Optional[str] = None
+    grade: Optional[str] = None,
+    per_category: Optional[int] = None
 ):
-    """Get list of books with optional filtering - optimized for card display"""
+    """
+    Get list of books with optional filtering - optimized for card display
+    
+    Args:
+        limit: Total number of books to return (ignored if per_category is set)
+        offset: Offset for pagination (ignored if per_category is set)
+        subject: Filter by subject/category
+        grade: Filter by grade
+        per_category: If set, returns this many books per category (balanced distribution)
+    """
     book_service = BookService()
-    books = await book_service.get_books(limit=limit, offset=offset, subject=subject, grade=grade)
+    
+    # If per_category is specified, fetch balanced books from each category
+    if per_category:
+        books = await book_service.get_books_by_category(per_category=per_category, grade=grade)
+    else:
+        books = await book_service.get_books(limit=limit, offset=offset, subject=subject, grade=grade)
+    
     return books
 
 
 @router.get("/search", response_model=List[BookCardResponse])
-async def search_books(q: str, limit: int = 20):
-    """Search books by title, author, or subject - optimized for card display"""
+async def search_books(
+    q: str, 
+    limit: int = 20,
+    search_in: str = "title"  # Options: title, author, subject, description, all
+):
+    """
+    Search books with specific criteria - optimized for card display
+    
+    Args:
+        q: Search query string
+        limit: Maximum number of results
+        search_in: What field to search in - 'title' (default), 'author', 'subject', 'description', or 'all'
+    """
     book_service = BookService()
-    books = await book_service.search_books(q, limit=limit)
+    books = await book_service.search_books(q, limit=limit, search_in=search_in)
     return books
 
 

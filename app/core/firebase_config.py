@@ -26,23 +26,38 @@ def get_firebase_credentials() -> dict:
 def initialize_firebase():
     """Initialize Firebase Admin SDK"""
     try:
+        # Check if Firebase credentials are configured
+        if not settings.FIREBASE_PROJECT_ID:
+            print("⚠️  Firebase credentials not configured. Skipping Firebase initialization.")
+            print("⚠️  Set environment variables to enable Firebase features.")
+            return
+            
         if not firebase_admin._apps:
             cred_dict = get_firebase_credentials()
             cred = credentials.Certificate(cred_dict)
             firebase_admin.initialize_app(cred, {
                 'storageBucket': 'ninja-tutor-44dec.firebasestorage.app'
             })
-        print("Firebase initialized successfully")
+        print("✅ Firebase initialized successfully")
     except Exception as e:
-        print(f"Firebase initialization error: {e}")
-        raise
+        print(f"❌ Firebase initialization error: {e}")
+        print("❌ Firebase features will not be available. Configure environment variables to fix.")
+        # Don't raise - allow app to start without Firebase
 
 
 def get_db():
     """Get Firestore database instance"""
-    return firestore.client()
+    try:
+        return firestore.client()
+    except ValueError:
+        print("❌ Firebase not initialized. Cannot access Firestore.")
+        raise RuntimeError("Firebase not configured. Please set environment variables.")
 
 
 def get_storage():
     """Get Firebase Storage bucket instance"""
-    return storage.bucket()
+    try:
+        return storage.bucket()
+    except ValueError:
+        print("❌ Firebase not initialized. Cannot access Storage.")
+        raise RuntimeError("Firebase not configured. Please set environment variables.")

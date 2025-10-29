@@ -98,6 +98,13 @@ class BookService:
             if grade:
                 query = query.where('grade', '==', grade)
             
+            # Note: We don't use order_by here when filters are applied because Firestore requires
+            # composite indexes for order_by + where clauses. Instead, we'll fetch and sort in Python.
+            # For no-filter queries, we can order by added_at without index issues.
+            if not subject and not grade:
+                # Only use order_by when there are no filters (no index needed)
+                query = query.order_by('added_at', direction='DESCENDING')
+            
             # Apply pagination
             query = query.limit(limit).offset(offset)
             
@@ -107,6 +114,23 @@ class BookService:
             for doc in docs:
                 book_data = doc.to_dict()
                 # Return only essential fields for card display
+                
+                # Handle Firestore timestamp conversion
+                added_at = book_data.get('added_at')
+                if added_at and not isinstance(added_at, datetime):
+                    # Firestore timestamp conversion
+                    try:
+                        from google.cloud.firestore import Timestamp
+                        if isinstance(added_at, Timestamp):
+                            added_at = added_at.to_datetime()
+                        elif hasattr(added_at, 'timestamp'):
+                            added_at = datetime.fromtimestamp(added_at.timestamp())
+                    except (ImportError, AttributeError):
+                        # If conversion fails, use current time
+                        added_at = datetime.now()
+                elif not added_at:
+                    added_at = datetime.now()
+                
                 book_card = BookCardResponse(
                     id=doc.id,
                     title=book_data.get('title', ''),
@@ -118,14 +142,93 @@ class BookService:
                     total_pages=book_data.get('total_pages', 0),
                     progress_percentage=0.0,  # No progress for global book list
                     last_read_at=book_data.get('last_read_at'),
-                    added_at=book_data.get('added_at', datetime.now())
+                    added_at=added_at
                 )
                 books.append(book_card)
+            
+            # Sort by added_at descending when filters are applied (since we can't use order_by)
+            if subject or grade:
+                books.sort(key=lambda b: b.added_at if b.added_at else datetime.min, reverse=True)
             
             return books
             
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error fetching books: {str(e)}")
+    
+    async def get_books_by_category(self, per_category: int = 10, grade: Optional[str] = None) -> List[BookCardResponse]:
+        """
+        Get balanced books from each category - fetches in single query, groups server-side
+        Returns per_category books from each category for balanced display
+        """
+        try:
+            # Fetch a larger batch of books (estimate: 12 categories * 10 books = 120 minimum)
+            # Fetch more to ensure we have enough from each category (200-300 should cover it)
+            query = self.db.collection('books')
+            
+            if grade:
+                query = query.where('grade', '==', grade)
+            
+            # Order by added_at descending (no subject filter = no index needed)
+            query = query.order_by('added_at', direction='DESCENDING').limit(300)
+            
+            docs = query.stream()
+            all_books = []
+            
+            # Process all documents
+            for doc in docs:
+                book_data = doc.to_dict()
+                
+                # Handle Firestore timestamp conversion
+                added_at = book_data.get('added_at')
+                if added_at and not isinstance(added_at, datetime):
+                    try:
+                        from google.cloud.firestore import Timestamp
+                        if isinstance(added_at, Timestamp):
+                            added_at = added_at.to_datetime()
+                        elif hasattr(added_at, 'timestamp'):
+                            added_at = datetime.fromtimestamp(added_at.timestamp())
+                    except (ImportError, AttributeError):
+                        added_at = datetime.now()
+                elif not added_at:
+                    added_at = datetime.now()
+                
+                book_card = BookCardResponse(
+                    id=doc.id,
+                    title=book_data.get('title', ''),
+                    author=book_data.get('author', ''),
+                    subject=book_data.get('subject', '') or 'General',  # Default to 'General' if empty
+                    grade=book_data.get('grade', ''),
+                    cover_url=book_data.get('cover_url'),
+                    file_url=book_data.get('file_url'),
+                    total_pages=book_data.get('total_pages', 0),
+                    progress_percentage=0.0,
+                    last_read_at=book_data.get('last_read_at'),
+                    added_at=added_at
+                )
+                all_books.append(book_card)
+            
+            # Group books by category
+            books_by_category = {}
+            for book in all_books:
+                category = book.subject if book.subject else 'General'
+                if category not in books_by_category:
+                    books_by_category[category] = []
+                books_by_category[category].append(book)
+            
+            # Take top N books from each category (already sorted by added_at descending)
+            result_books = []
+            for category, books in books_by_category.items():
+                # Take top per_category books from this category
+                category_books = books[:per_category]
+                result_books.extend(category_books)
+            
+            # Sort final result by added_at to maintain chronological order
+            result_books.sort(key=lambda b: b.added_at if b.added_at else datetime.min, reverse=True)
+            
+            return result_books
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error fetching books by category: {str(e)}")
     
     async def get_book(self, book_id: str) -> Optional[Book]:
         """Get a single book by ID"""
@@ -143,36 +246,102 @@ class BookService:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error fetching book: {str(e)}")
     
-    async def search_books(self, query: str, limit: int = 20) -> List[BookCardResponse]:
-        """Search books by title, author, or subject - optimized for card display"""
+    async def search_books(self, query: str, limit: int = 20, search_in: str = "title") -> List[BookCardResponse]:
+        """
+        Search books using contains matching with specific criteria
+        
+        Args:
+            query: Search query string
+            limit: Maximum number of results
+            search_in: What field to search in - 'title', 'author', 'subject', 'description', or 'all'
+        """
         try:
             # Note: Firestore doesn't support full-text search natively
-            # This is a simple implementation that searches in title and author fields
+            # We fetch books and filter in Python for contains matching
             # For production, consider using Algolia or Elasticsearch
             
+            query_lower = query.lower().strip()
+            if not query_lower:
+                return []
+            
+            # Normalize search_in parameter
+            search_in = search_in.lower() if search_in else "title"
+            
+            # Fetch all books (or a reasonable limit for searching)
+            # In production with many books, you'd want to use a search service
+            all_docs = self.db.collection('books').stream()
+            
             books = []
+            seen_ids = set()  # Track book IDs to avoid duplicates
             
-            # Search in title (case-insensitive)
-            title_query = self.db.collection('books').where('title', '>=', query).where('title', '<=', query + '\uf8ff').limit(limit)
-            title_docs = title_query.stream()
-            
-            for doc in title_docs:
+            for doc in all_docs:
+                if len(books) >= limit:
+                    break
+                    
                 book_data = doc.to_dict()
-                # Return only essential fields for card display
-                book_card = BookCardResponse(
-                    id=doc.id,
-                    title=book_data.get('title', ''),
-                    author=book_data.get('author', ''),
-                    subject=book_data.get('subject', ''),
-                    grade=book_data.get('grade', ''),
-                    cover_url=book_data.get('cover_url'),
-                    file_url=book_data.get('file_url'),  # Include file_url for reading
-                    total_pages=book_data.get('total_pages', 0),
-                    progress_percentage=0.0,
-                    last_read_at=book_data.get('last_read_at'),
-                    added_at=book_data.get('added_at', datetime.now())
-                )
-                books.append(book_card)
+                book_id = doc.id
+                
+                # Skip if already added
+                if book_id in seen_ids:
+                    continue
+                
+                # Get field values (lowercase for comparison)
+                title_lower = book_data.get('title', '').lower()
+                author_lower = book_data.get('author', '').lower()
+                subject_lower = book_data.get('subject', '').lower()
+                description_lower = (book_data.get('description') or '').lower()
+                
+                # Check if query matches based on search criteria
+                matches = False
+                if search_in == "title":
+                    matches = query_lower in title_lower
+                elif search_in == "author":
+                    matches = query_lower in author_lower
+                elif search_in == "subject":
+                    matches = query_lower in subject_lower
+                elif search_in == "description":
+                    matches = query_lower in description_lower
+                elif search_in == "all":
+                    # Search in all fields
+                    matches = (query_lower in title_lower or 
+                              query_lower in author_lower or 
+                              query_lower in subject_lower or
+                              query_lower in description_lower)
+                else:
+                    # Default to title if unknown search_in value
+                    matches = query_lower in title_lower
+                
+                if matches:
+                    seen_ids.add(book_id)
+                    
+                    # Handle Firestore timestamp conversion
+                    added_at = book_data.get('added_at')
+                    if added_at and not isinstance(added_at, datetime):
+                        try:
+                            from google.cloud.firestore import Timestamp
+                            if isinstance(added_at, Timestamp):
+                                added_at = added_at.to_datetime()
+                            elif hasattr(added_at, 'timestamp'):
+                                added_at = datetime.fromtimestamp(added_at.timestamp())
+                        except (ImportError, AttributeError):
+                            added_at = datetime.now()
+                    elif not added_at:
+                        added_at = datetime.now()
+                    
+                    book_card = BookCardResponse(
+                        id=book_id,
+                        title=book_data.get('title', ''),
+                        author=book_data.get('author', ''),
+                        subject=book_data.get('subject', ''),
+                        grade=book_data.get('grade', ''),
+                        cover_url=book_data.get('cover_url'),
+                        file_url=book_data.get('file_url'),
+                        total_pages=book_data.get('total_pages', 0),
+                        progress_percentage=0.0,
+                        last_read_at=book_data.get('last_read_at'),
+                        added_at=added_at
+                    )
+                    books.append(book_card)
             
             return books
             

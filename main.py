@@ -70,6 +70,27 @@ allowed_origins = [
     "http://127.0.0.1:8080",  # Alternative localhost
 ]
 
+# Add Firebase Hosting URLs for production (supports comma-separated domains)
+firebase_urls = os.getenv("FIREBASE_HOSTING_URL", "")
+if firebase_urls:
+    # Split by comma to support multiple domains
+    urls = [url.strip() for url in firebase_urls.split(",")]
+    for firebase_url in urls:
+        # Handle both with and without protocol prefix
+        if firebase_url.startswith("https://"):
+            url_without_protocol = firebase_url[8:]  # Remove "https://"
+            allowed_origins.append(f"https://{url_without_protocol}")
+            allowed_origins.append(f"http://{url_without_protocol}")
+        elif firebase_url.startswith("http://"):
+            url_without_protocol = firebase_url[7:]  # Remove "http://"
+            allowed_origins.append(f"https://{url_without_protocol}")
+            allowed_origins.append(f"http://{url_without_protocol}")
+        else:
+            # No protocol prefix
+            allowed_origins.append(f"https://{firebase_url}")
+            allowed_origins.append(f"http://{firebase_url}")
+    logger.info(f"Added Firebase Hosting URLs to CORS: {firebase_urls}")
+
 # In production, don't use wildcard
 if settings.DEBUG:
     logger.warning("⚠️  CORS wildcard enabled - DEBUG mode. Disable in production!")
@@ -103,10 +124,12 @@ async def health_check():
 
 
 if __name__ == "__main__":
+    # Read PORT from environment (Cloud Run sets this)
+    port = int(os.getenv("PORT", settings.PORT))
     uvicorn.run(
         "main:app",
-        host=settings.HOST,
-        port=settings.PORT,
+        host="0.0.0.0",
+        port=port,
         reload=settings.DEBUG,
         log_level="info",
         access_log=True,
