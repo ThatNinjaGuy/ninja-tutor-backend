@@ -6,6 +6,7 @@ from fastapi import HTTPException
 import json
 import logging
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 from ..core.config import settings
 from ..models.quiz import Question, QuestionType, AnswerOption, DifficultyLevel
@@ -35,7 +36,7 @@ class AIService:
         # Use Gemini model (correct name for google-generativeai SDK)
         self.model = genai.GenerativeModel('models/gemini-2.5-flash')
         logger.info(f"✅ Google Gemini initialized")
-        logger.info(f"   Model: gemini-1.5-flash-latest")
+        logger.info(f"   Model: gemini-2.5-flash")
     
     async def get_definition(self, text: str, context: str) -> Dict[str, Any]:
         """Get AI-powered definition for selected text"""
@@ -117,47 +118,136 @@ class AIService:
             if question_types is None:
                 question_types = [QuestionType.multiple_choice, QuestionType.true_false]
             
+            # Get difficulty value (handle both enum and string)
+            difficulty_str = difficulty.value if hasattr(difficulty, 'value') else str(difficulty)
+            
             logger.info(f"📝 Content length: {len(content)} chars")
             logger.info(f"🎯 Question types: {[qt.value if hasattr(qt, 'value') else str(qt) for qt in question_types]}")
             
             prompt = f"""
-            Generate {question_count} educational questions based on this content:
-            
-            {content}...
-            
-            Requirements:
-            - Difficulty level: {difficulty.value}
-            - Question types: {[qt.value if hasattr(qt, 'value') else str(qt) for qt in question_types]}
-            - Focus on key concepts and important information
-            - For multiple choice: provide 4 options with 1 correct answer
-            - For true/false: provide clear statements
-            - Include brief explanations for correct answers
-            
-            Format each question as:
-            Question: [question text]
-            Options: [if multiple choice - A, B, C, D]
-            Correct: [correct answer]
-            Explanation: [brief explanation]
+You are an educational AI assistant helping create practice questions from academic material.
 
-            Present the overall answer as a JSON array with no prefix or suffix. Definitely always include JSON array with various JSON elements indicating each question.
-            ---
-            """
+INSTRUCTIONS:
+1. Generate exactly {question_count} educational questions based on the following content
+2. Questions should test understanding at {difficulty_str} level
+3. Use question types: {[qt.value if hasattr(qt, 'value') else str(qt) for qt in question_types]}
+4. Focus on key concepts, facts, and important information from the text
+5. Make all questions factual and educational
+
+FORMATTING RULES:
+- For multiple choice questions: Provide exactly 4 options (A, B, C, D) with 1 correct answer
+- For true/false questions: Provide clear, unambiguous statements based on the text
+- Include brief explanations (1-2 sentences) for correct answers
+- Questions should be directly answerable from the provided content
+
+OUTPUT FORMAT - RETURN AS JSON ARRAY ONLY:
+[
+  {{
+    "Question": "question text here",
+    "Options": {{"A": "option 1", "B": "option 2", "C": "option 3", "D": "option 4"}},
+    "Correct": "A",
+    "Explanation": "why A is correct"
+  }}
+]
+
+CONTENT TO BASE QUESTIONS ON:
+{content[:8000]}...
+---
+CRITICAL: Return ONLY a valid JSON array. No text before or after the array.
+"""
             
             logger.info(f"🌐 Calling Vertex AI Gemini...")
-            response = self.model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    max_output_tokens=1500,
-                    temperature=0.6,
+            logger.info(f"📊 Prompt length: {len(prompt)} chars, Max output tokens: 4000")
+            
+            # Configure safety settings
+            safety_settings = [
+                {
+                    "category": HarmCategory.HARM_CATEGORY_HARASSMENT,
+                    "threshold": HarmBlockThreshold.BLOCK_NONE,
+                },
+                {
+                    "category": HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                    "threshold": HarmBlockThreshold.BLOCK_NONE,
+                },
+                {
+                    "category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                    "threshold": HarmBlockThreshold.BLOCK_NONE,
+                },
+                {
+                    "category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                    "threshold": HarmBlockThreshold.BLOCK_NONE,
+                },
+            ]
+            logger.info(f"🛡️ Safety settings: All categories set to BLOCK_NONE")
+            
+            try:
+                response = self.model.generate_content(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        max_output_tokens=4000,  # Increased for 10 questions with full explanations
+                        temperature=0.6,
+                    ),
+                    safety_settings=safety_settings,
                 )
-            )
-            
-            logger.info(f"✅ Gemini response received")
-            
-            # Parse response and create Question objects
-            content_response = response.text
-            logger.info(f"📄 Response content length: {len(content_response)} chars")
-            logger.debug(f"🔍 AI Response:\n{content_response}")
+                
+                logger.info(f"✅ Gemini response received")
+                
+                # Check if response was blocked
+                if not response.candidates or len(response.candidates) == 0:
+                    logger.error("❌ Response has no candidates - likely blocked")
+                    if hasattr(response, 'prompt_feedback'):
+                        logger.error(f"Prompt feedback: {response.prompt_feedback}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail="AI response was blocked. Please try again with different content."
+                    )
+                
+                # Check finish reason
+                candidate = response.candidates[0]
+                finish_reason = candidate.finish_reason if candidate else None
+                logger.info(f"📋 Finish reason: {finish_reason}")
+                
+                # Log safety ratings if present
+                if hasattr(candidate, 'safety_ratings') and candidate.safety_ratings:
+                    logger.info(f"🔒 Safety ratings:")
+                    for rating in candidate.safety_ratings:
+                        logger.info(f"   - {rating.category}: {rating.probability}")
+                
+                # Parse response and create Question objects
+                try:
+                    # Try to get text from response.text first (preferred method)
+                    content_response = response.text
+                    logger.info(f"📄 Response text accessed successfully via response.text")
+                except Exception as text_error:
+                    logger.warning(f"⚠️ Cannot access response.text: {text_error}")
+                    
+                    # Fallback: try to get text from parts
+                    if hasattr(candidate, 'content') and candidate.content and hasattr(candidate.content, 'parts'):
+                        parts = candidate.content.parts
+                        content_response = "\n".join([part.text for part in parts if hasattr(part, 'text')])
+                        logger.info(f"📄 Response text accessed successfully via parts ({len(content_response)} chars)")
+                    else:
+                        logger.error(f"❌ Cannot access response.text and no valid parts found")
+                        logger.error(f"Response finish_reason: {finish_reason}")
+                        if hasattr(candidate, 'finish_message'):
+                            logger.error(f"Response finish_message: {candidate.finish_message}")
+                        if hasattr(response, 'prompt_feedback'):
+                            logger.error(f"Prompt feedback: {response.prompt_feedback}")
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"AI response incomplete: {finish_reason}"
+                        )
+                
+                logger.info(f"📄 Response content length: {len(content_response)} chars")
+                logger.debug(f"🔍 AI Response:\n{content_response}")
+            except HTTPException:
+                raise
+            except Exception as api_error:
+                logger.error(f"❌ Gemini API error: {api_error}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"AI service error: {str(api_error)}"
+                )
             
             questions = self._parse_generated_questions(content_response, difficulty)
             logger.info(f"✅ Parsed {len(questions)} questions from AI response")
@@ -180,42 +270,63 @@ class AIService:
         logger.debug(f"🔍 Full content to parse:\n{content}")
         questions = []
         
+        # Strip markdown code block markers if present
+        content = content.strip()
+        if content.startswith("```json"):
+            content = content[7:]  # Remove ```json
+        elif content.startswith("```"):
+            content = content[3:]  # Remove ```
+        if content.endswith("```"):
+            content = content[:-3]  # Remove closing ```
+        content = content.strip()
+        
         try:
             # Try to parse as JSON first
-            json_data = json.loads(content.strip())
+            json_data = json.loads(content)
             logger.info(f"✅ Successfully parsed JSON response with {len(json_data)} questions")
             
             for i, question_data in enumerate(json_data):
                 try:
                     question_text = question_data.get('Question', '')
-                    options_dict = question_data.get('Options', {})
+                    options_dict = question_data.get('Options')
                     correct_answer = question_data.get('Correct', '')
                     explanation = question_data.get('Explanation', '')
                     
+                    # Determine question type based on options
+                    is_true_false = options_dict is None or correct_answer in ['True', 'False', 'true', 'false']
+                    
                     # Convert options dict to list of AnswerOption objects
                     options = []
-                    for key, value in options_dict.items():
-                        is_correct = key == correct_answer or correct_answer in value
-                        options.append(AnswerOption(
-                            id=f"opt_{i}_{key}",
-                            text=f"{key}) {value}",
-                            is_correct=is_correct
-                        ))
+                    if options_dict and isinstance(options_dict, dict):
+                        # Multiple choice question
+                        for key, value in options_dict.items():
+                            is_correct = key == correct_answer or correct_answer in value
+                            options.append(AnswerOption(
+                                id=f"opt_{i}_{key}",
+                                text=f"{key}) {value}",
+                                is_correct=is_correct
+                            ))
+                    elif is_true_false:
+                        # True/False question - create options manually
+                        options = [
+                            AnswerOption(id=f"opt_{i}_true", text="True", is_correct=str(correct_answer).lower() == 'true'),
+                            AnswerOption(id=f"opt_{i}_false", text="False", is_correct=str(correct_answer).lower() == 'false'),
+                        ]
                     
                     if question_text:
                         question = Question(
                             id=f"q_{i}",
-                            type=QuestionType.multiple_choice,
+                            type=QuestionType.true_false if is_true_false else QuestionType.multiple_choice,
                             question_text=question_text,
                             options=options,
-                            correct_answer=None,  # Embedded in options
+                            correct_answer=correct_answer if is_true_false else None,
                             explanation=explanation,
                             difficulty=difficulty,
                             points=1
                         )
                         questions.append(question)
                         logger.info(f"✅ Successfully parsed question {len(questions)}: {question_text[:50]}...")
-                        logger.debug(f"   Options: {len(options)}, Correct: {correct_answer}")
+                        logger.debug(f"   Type: {'True/False' if is_true_false else 'Multiple Choice'}, Options: {len(options)}")
                     else:
                         logger.warning(f"⚠️ Question {i+1} had no question text, skipping")
                         

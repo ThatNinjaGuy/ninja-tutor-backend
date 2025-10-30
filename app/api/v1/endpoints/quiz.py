@@ -105,9 +105,8 @@ async def generate_quiz(
     elif book.file_url:
         logger.info(f"📖 Extracting content from PDF: {book.file_url}")
         try:
-            file_processor = FileProcessor()
             # Extract from local file path (file_url contains the local path)
-            content_text = file_processor.extract_text_from_pdf(book.file_url)
+            content_text, _ = await FileProcessor.extract_text_from_pdf(book.file_url)
             logger.info(f"✅ Extracted {len(content_text)} characters from PDF")
         except Exception as e:
             logger.error(f"❌ Failed to extract PDF content: {str(e)}")
@@ -120,15 +119,31 @@ async def generate_quiz(
     # Generate questions using AI
     logger.info(f"🤖 Generating questions with AI...")
     ai_service = AIService()
-    # Use content from requested page range (sample 3000 chars per page)
-    start_page = request.page_range[0] - 1  # 0-indexed
-    end_page = request.page_range[1]
-    chars_per_page = 3000
-    start_char = start_page * chars_per_page
-    end_char = end_page * chars_per_page
-    content = content_text[start_char:end_char] if len(content_text) > start_char else content_text[:5000]
     
-    logger.info(f"📝 Using content slice: chars {start_char}-{end_char} (length: {len(content)})")
+    # Extract content from requested page range if using PDF
+    start_page = request.page_range[0]
+    end_page = request.page_range[1]
+    
+    if book.file_url:
+        logger.info(f"📖 Extracting content from pages {start_page}-{end_page}")
+        try:
+            content = await FileProcessor.extract_text_from_pdf_pages(
+                book.file_url,
+                start_page,
+                end_page
+            )
+            logger.info(f"📝 Extracted {len(content)} characters from pages {start_page}-{end_page}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to extract specific pages, using full content: {str(e)}")
+            content = content_text
+    else:
+        # Fallback to character-based slicing if no PDF
+        logger.info(f"📝 Using character-based slicing for pages {start_page}-{end_page}")
+        chars_per_page = 3000
+        start_char = (start_page - 1) * chars_per_page
+        end_char = end_page * chars_per_page
+        content = content_text[start_char:end_char] if len(content_text) > start_char else content_text[:5000]
+        logger.info(f"📝 Using content slice: chars {start_char}-{end_char} (length: {len(content)})")
     
     try:
         questions = await ai_service.generate_questions(
