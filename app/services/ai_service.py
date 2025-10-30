@@ -500,7 +500,8 @@ class AIService:
         book_metadata: Optional[Dict[str, Any]] = None,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         user_id: Optional[str] = None,
-        book_file_path: Optional[str] = None
+        book_file_path: Optional[str] = None,
+        provided_page_context: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
         Answer questions about reading content using Google ADK Agent.
@@ -519,7 +520,8 @@ class AIService:
                     user_id=user_id,
                     current_page=book_metadata.get('current_page', 1),
                     selected_text=selected_text,
-                    conversation_history=conversation_history
+                    conversation_history=conversation_history,
+                    provided_page_context=provided_page_context,
                 )
                 
                 return result
@@ -527,7 +529,12 @@ class AIService:
             # Fallback to direct API call if agent prerequisites not met
             logger.warning("⚠️ Falling back to direct Gemini call (missing agent prerequisites)")
             return await self._answer_with_direct_api(
-                question, page_content, selected_text, book_metadata, conversation_history
+                question,
+                page_content,
+                selected_text,
+                book_metadata,
+                conversation_history,
+                provided_page_context
             )
             
         except Exception as e:
@@ -541,7 +548,8 @@ class AIService:
         page_content: str,
         selected_text: Optional[str] = None,
         book_metadata: Optional[Dict[str, Any]] = None,
-        conversation_history: Optional[List[Dict[str, str]]] = None
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        provided_page_context: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """Direct API fallback (original implementation)"""
         try:
@@ -552,18 +560,44 @@ class AIService:
             max_context_chars = 12000
             
             logger.info(f"🤖 Processing question: '{question[:50]}...'")
-            logger.info(f"📊 Raw page content length: {len(page_content)} chars")
+            logger.info(f"📊 Extracted PDF context length: {len(page_content)} chars")
             logger.info(f"📝 Has selected text: {selected_text is not None}")
             logger.info(f"💬 Conversation history length: {len(conversation_history) if conversation_history else 0}")
             
-            # Smart truncation: prioritize content while staying within limits
-            if len(page_content) > max_context_chars:
-                logger.warning(f"⚠️ Page content ({len(page_content)} chars) exceeds limit ({max_context_chars})")
-                # Keep the first portion which likely contains the most relevant context
-                page_content = page_content[:max_context_chars]
-                logger.info(f"✂️ Truncated to {len(page_content)} chars")
+            if provided_page_context:
+                provided_lengths = {key: len(value) for key, value in provided_page_context.items()}
+                logger.info(f"🧠 Client-provided context lengths: {provided_lengths}")
+            
+            context_sections: List[str] = []
+            if provided_page_context:
+                ordered_labels = [
+                    ("previous_page_text", "Previous Page (client)"),
+                    ("current_page_text", "Current Page (client)"),
+                    ("next_page_text", "Next Page (client)"),
+                ]
+                for key, label in ordered_labels:
+                    text = provided_page_context.get(key) if provided_page_context else None
+                    if text:
+                        context_sections.append(f"--- {label} ---\n{text.strip()}")
+
+            if page_content:
+                context_sections.append("--- Extracted PDF Context ---\n" + page_content.strip())
+
+            combined_context = "\n\n".join(context_sections)
+
+            if not combined_context:
+                combined_context = page_content
+
+            if len(combined_context) > max_context_chars:
+                logger.warning(
+                    f"⚠️ Combined context ({len(combined_context)} chars) exceeds limit ({max_context_chars})"
+                )
+                combined_context = combined_context[:max_context_chars]
+                logger.info(f"✂️ Truncated combined context to {len(combined_context)} chars")
             else:
-                logger.info(f"✅ Page content within limits ({len(page_content)} chars)")
+                logger.info(f"✅ Combined context within limits ({len(combined_context)} chars)")
+            
+            context_char_count = len(combined_context)
             
             # Build the message array with proper system/user pattern
             messages = []
@@ -614,7 +648,7 @@ Pages Provided: This material covers multiple pages around the current page."""
             
             # Add reading material
             prompt_parts.append("=== READING MATERIAL ===")
-            prompt_parts.append(page_content)
+            prompt_parts.append(combined_context)
             prompt_parts.append("=== END READING MATERIAL ===")
             prompt_parts.append("")
             
@@ -661,7 +695,7 @@ Pages Provided: This material covers multiple pages around the current page."""
                 "has_selected_text": selected_text is not None,
                 "timestamp": "now",
                 "tokens_used": tokens_used,
-                "context_chars": len(page_content)
+                "context_chars": context_char_count
             }
             
         except Exception as e:

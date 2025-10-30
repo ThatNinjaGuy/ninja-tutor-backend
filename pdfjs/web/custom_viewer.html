@@ -223,7 +223,30 @@ See https://github.com/adobe-type-tools/cmap-resources
               if (window.PDFViewerApplication) {
                 console.log("🚀 Opening PDF from postMessage");
                 pdfLoaded = true; // Mark that a PDF has been loaded
-                window.PDFViewerApplication.open(event.data.url);
+                const desiredPage = parseInt(event.data.page, 10);
+                const openPromise = window.PDFViewerApplication.open(event.data.url);
+                // After the document opens, navigate to the requested page if provided
+                Promise.resolve(openPromise)
+                  .then(() => {
+                    if (!isNaN(desiredPage) && desiredPage > 0) {
+                      console.log("➡️ Navigating to requested page:", desiredPage);
+                      // Wait for pages to initialize if needed
+                      if (window.PDFViewerApplication.eventBus) {
+                        const goTo = () => {
+                          window.PDFViewerApplication.page = desiredPage;
+                        };
+                        if (window.PDFViewerApplication.pdfViewer && window.PDFViewerApplication.pdfViewer.pagesCount) {
+                          goTo();
+                        } else {
+                          window.PDFViewerApplication.eventBus.on("pagesinit", goTo, { once: true });
+                        }
+                      } else {
+                        // Fallback small delay
+                        setTimeout(() => (window.PDFViewerApplication.page = desiredPage), 250);
+                      }
+                    }
+                  })
+                  .catch(err => console.error("❌ Failed to open PDF:", err));
               } else {
                 console.error("❌ PDFViewerApplication not available");
               }

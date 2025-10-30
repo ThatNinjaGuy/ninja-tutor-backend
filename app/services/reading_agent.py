@@ -286,7 +286,8 @@ When a user asks a question:
         user_id: str,
         current_page: int,
         selected_text: Optional[str] = None,
-        conversation_history: Optional[list] = None
+        conversation_history: Optional[list] = None,
+        provided_page_context: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
         Ask the reading agent a question.
@@ -296,14 +297,55 @@ When a user asks a question:
             session_key = self.get_or_create_session(user_id, book_metadata.get("book_id", "unknown"))
             
             # Build context for the agent
+            gemini_history: List[Dict[str, Any]] = []
+            if conversation_history:
+                prior_messages = conversation_history[:-1]
+                if prior_messages:
+                    limited_history = prior_messages[-10:]
+                    for message in limited_history:
+                        content_text = message.get("content") if isinstance(message, dict) else None
+                        role = message.get("role") if isinstance(message, dict) else None
+                        if not content_text or not role:
+                            continue
+                        gemini_history.append({"role": role, "parts": [content_text]})
+
             context_parts = []
             context_parts.append(f"Book: {book_metadata.get('title')} by {book_metadata.get('author')}")
             context_parts.append(f"Subject: {book_metadata.get('subject')}")
             context_parts.append(f"Student is currently on page {current_page} of {book_metadata.get('total_pages')} pages")
+            if book_metadata.get('extracted_range'):
+                context_parts.append(f"Extracted PDF context spans pages {book_metadata.get('extracted_range')}")
             context_parts.append(f"Book file path: {book_file_path}")
             
             if selected_text:
-                context_parts.append(f"\nStudent has selected this text: \"{selected_text}\"")
+                context_parts.append(f"\nStudent has selected this text (treat as the primary focus): \"{selected_text}\"")
+
+            if provided_page_context:
+                context_parts.append("\nAdditional context captured from the reading interface:")
+                ordered_labels = [
+                    ("previous_page_text", "Previous page"),
+                    ("current_page_text", "Current page"),
+                    ("next_page_text", "Next page"),
+                ]
+                for key, label in ordered_labels:
+                    text = provided_page_context.get(key)
+                    if not text:
+                        continue
+                    trimmed = text if len(text) <= 4000 else text[:4000] + "..."
+                    context_parts.append(f"\n{label} context:\n{trimmed}")
+
+            if conversation_history:
+                prior_messages = conversation_history[:-1]
+                if prior_messages:
+                    recent_history = prior_messages[-6:]
+                    context_parts.append("\nRecent conversation before this question:")
+                    for message in recent_history:
+                        role_label = "Student" if message.get("role") == "user" else "Assistant"
+                        text = message.get("content", "")
+                        if not text:
+                            continue
+                        trimmed_text = text if len(text) <= 600 else text[:600] + "..."
+                        context_parts.append(f"{role_label}: {trimmed_text}")
             
             context_parts.append(f"\nStudent's question: {question}")
             context_parts.append(f"\nPlease use your tools to extract relevant content from the book and provide a thorough answer.")
@@ -313,10 +355,12 @@ When a user asks a question:
             logger.info(f"🤖 Agent processing question with Gemini Function Calling")
             logger.info(f"   Current page: {current_page}")
             logger.info(f"   Has selected text: {selected_text is not None}")
+            logger.info(f"   Provided context keys: {list(provided_page_context.keys()) if provided_page_context else []}")
+            logger.info(f"   Prior conversation turns supplied: {len(gemini_history)}")
             logger.info(f"   Book file: {book_file_path[:50]}...")
             
             # Start a chat session for multi-turn conversation
-            chat = self.model.start_chat(history=[])
+            chat = self.model.start_chat(history=gemini_history)
             
             # Send the prompt and handle function calling loop
             response = await chat.send_message_async(full_prompt)
@@ -444,7 +488,8 @@ When a user asks a question:
                 "confidence": 0.95,
                 "agent_used_tools": iterations > 0,  # True if model called any functions
                 "function_calls_made": iterations,
-                "session_key": session_key
+                "session_key": session_key,
+                "client_context_used": bool(provided_page_context)
             }
             
         except Exception as e:

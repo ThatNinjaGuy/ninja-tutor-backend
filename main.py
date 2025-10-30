@@ -68,6 +68,9 @@ allowed_origins = [
     "http://127.0.0.1:3000",  # Alternative localhost
     "http://localhost:8080",  # Alternative Flutter port
     "http://127.0.0.1:8080",  # Alternative localhost
+    "ninja-tutor-44dec.web.app",
+    "www.thatninjaguy.in",
+    "thatninjaguy.in",
 ]
 
 # Add Firebase Hosting URLs for production (supports comma-separated domains)

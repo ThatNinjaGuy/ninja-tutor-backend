@@ -222,6 +222,15 @@ class ReadingQuestionRequest(BaseModel):
     current_page: int
     selected_text: Optional[str] = None
     conversation_history: Optional[List[Dict[str, str]]] = []
+    previous_page_text: Optional[str] = None
+    current_page_text: Optional[str] = None
+    next_page_text: Optional[str] = None
+
+
+class BatchPageContentRequest(BaseModel):
+    """Request for getting content from multiple pages"""
+    book_id: str
+    page_numbers: List[int]
 
 
 @router.post("/reading/ask")
@@ -280,6 +289,20 @@ async def ask_reading_question(
             sample = page_content[:200].replace('\n', ' ')
             logger.info(f"📄 Content sample: '{sample}...'")
         
+        provided_page_context = {
+            "previous_page_text": (request.previous_page_text or "").strip(),
+            "current_page_text": (request.current_page_text or "").strip(),
+            "next_page_text": (request.next_page_text or "").strip(),
+        }
+
+        provided_page_context = {
+            key: value for key, value in provided_page_context.items() if value
+        }
+
+        if provided_page_context:
+            context_lengths = {key: len(value) for key, value in provided_page_context.items()}
+            logger.info(f"🧠 Provided page context lengths: {context_lengths}")
+
         # Prepare book metadata
         book_metadata = {
             "book_id": request.book_id,
@@ -287,7 +310,8 @@ async def ask_reading_question(
             "author": book.author,
             "subject": book.subject,
             "current_page": request.current_page,
-            "total_pages": book.total_pages
+            "total_pages": book.total_pages,
+            "extracted_range": f"{start_page}-{end_page}"
         }
         
         logger.info(f"📚 Book metadata: {book_metadata}")
@@ -303,7 +327,8 @@ async def ask_reading_question(
             book_metadata=book_metadata,
             conversation_history=request.conversation_history,
             user_id=current_user_id,
-            book_file_path=book.file_url
+            book_file_path=book.file_url,
+            provided_page_context=provided_page_context,
         )
         
         logger.info(f"✅ AI response generated successfully")
@@ -316,6 +341,11 @@ async def ask_reading_question(
         result["current_page"] = request.current_page
         result["book_id"] = request.book_id
         result["user_id"] = current_user_id
+        result["has_selected_text"] = bool(request.selected_text)
+        if provided_page_context:
+            result["client_context_sections"] = {
+                key: len(value) for key, value in provided_page_context.items()
+            }
         
         return result
         
@@ -324,6 +354,71 @@ async def ask_reading_question(
     except Exception as e:
         logger.error(f"Error answering reading question: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing question: {str(e)}")
+
+
+@router.post("/reading/page-content-batch")
+async def get_multiple_page_content(
+    request: BatchPageContentRequest,
+    current_user_id: str = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Extract and return content for multiple pages in a single request.
+    Used by frontend to efficiently get page context for AI features.
+    """
+    try:
+        from ....services.file_processor import FileProcessor
+        
+        # Get book information
+        book_service = BookService()
+        book = await book_service.get_book(request.book_id)
+        
+        if not book:
+            raise HTTPException(status_code=404, detail="Book not found")
+        
+        if not book.file_url:
+            raise HTTPException(status_code=400, detail="Book PDF not available")
+        
+        # Validate page numbers
+        for page_number in request.page_numbers:
+            if page_number < 1 or page_number > book.total_pages:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Page number {page_number} out of range (1-{book.total_pages})"
+                )
+        
+        # Remove duplicates and sort
+        unique_pages = sorted(set(request.page_numbers))
+        
+        logger.info(f"📖 Extracting content for {len(unique_pages)} pages: {unique_pages}")
+        
+        # Extract page content
+        file_processor = FileProcessor()
+        page_contents = {}
+        
+        for page_number in unique_pages:
+            try:
+                page_content = await file_processor.extract_text_from_pdf_page(
+                    book.file_url,
+                    page_number
+                )
+                page_contents[str(page_number)] = page_content
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to extract page {page_number}: {str(e)}")
+                page_contents[str(page_number)] = ""
+        
+        return {
+            "book_id": request.book_id,
+            "total_pages": book.total_pages,
+            "pages": page_contents,
+            "book_title": book.title,
+            "book_subject": book.subject
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error extracting page content: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error extracting pages: {str(e)}")
 
 
 @router.get("/reading/page-content/{book_id}/{page_number}")

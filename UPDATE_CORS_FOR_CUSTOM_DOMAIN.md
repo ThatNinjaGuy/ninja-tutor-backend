@@ -72,3 +72,4 @@ Example formats that work:
 - `https://reading.thatninjaguy.in` (with protocol)
 - `reading.thatninjaguy.in,ninja-tutor-44dec.web.app` (multiple, comma-separated)
 
+
