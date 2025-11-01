@@ -1350,27 +1350,49 @@ function showSelectionTooltip(selection, rect) {
 function positionTooltip(tooltip, rect) {
   if (!tooltip || !rect) return;
   
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-  const tooltipWidth = 200; // Approximate width
-  const tooltipHeight = 50; // Approximate height
+  // Make tooltip visible to measure its actual dimensions
+  tooltip.style.visibility = 'hidden';
+  tooltip.style.position = 'fixed';
   
-  let left = rect.left + (rect.width / 2) - (tooltipWidth / 2);
-  let top = rect.top - tooltipHeight - 10;
-  
-  // Keep tooltip within viewport
-  if (left < 10) left = 10;
-  if (left + tooltipWidth > viewportWidth - 10) {
-    left = viewportWidth - tooltipWidth - 10;
-  }
-  
-  // If tooltip would be above viewport, show below selection
-  if (top < 10) {
-    top = rect.bottom + 10;
-  }
-  
-  tooltip.style.left = `${left}px`;
-  tooltip.style.top = `${top}px`;
+  // Wait for next frame to get accurate dimensions
+  requestAnimationFrame(() => {
+    const tooltipRect = tooltip.getBoundingClientRect();
+    const tooltipWidth = tooltipRect.width || 200;
+    const tooltipHeight = tooltipRect.height || 50;
+    
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    
+    // Center tooltip horizontally relative to selection
+    let left = rect.left + (rect.width / 2) - (tooltipWidth / 2);
+    
+    // Position above selection by default
+    let top = rect.top - tooltipHeight - 10;
+    
+    // Keep tooltip within viewport horizontally
+    if (left < 10) left = 10;
+    if (left + tooltipWidth > viewportWidth - 10) {
+      left = viewportWidth - tooltipWidth - 10;
+    }
+    
+    // If tooltip would be above viewport, show below selection
+    if (top < 10) {
+      top = rect.bottom + 10;
+    }
+    
+    // If tooltip would be below viewport, force it above
+    if (top + tooltipHeight > viewportHeight - 10) {
+      top = rect.top - tooltipHeight - 10;
+      // Last resort: show at top of viewport
+      if (top < 10) {
+        top = 10;
+      }
+    }
+    
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+    tooltip.style.visibility = 'visible';
+  });
 }
 
 // Hide selection tooltip
