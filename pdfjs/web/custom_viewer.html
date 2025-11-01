@@ -149,30 +149,199 @@ See https://github.com/adobe-type-tools/cmap-resources
         display: none !important;
         visibility: hidden !important;
       }
-      
+
       /* Note highlighting styles */
       .note-highlight {
-        background-color: rgba(255, 235, 59, 0.4);
-        cursor: pointer;
+        background-color: rgba(76, 175, 80, 0.7) !important;
+        cursor: pointer !important;
         position: relative;
-        border-bottom: 2px solid #FBC02D;
-        transition: background-color 0.2s;
+        border-bottom: 2px solid #2e7d32 !important;
+        transition: background-color 0.2s, transform 0.1s;
+        display: inline !important;
+        padding: 2px 0 !important;
+        z-index: 10;
+        pointer-events: auto !important;
       }
-      
+
       .note-highlight:hover {
-        background-color: rgba(255, 235, 59, 0.6);
+        background-color: rgba(76, 175, 80, 0.85) !important;
+        transform: translateY(-1px);
       }
-      
+
+      .note-highlight:active {
+        transform: translateY(0);
+      }
+
       .note-tooltip {
         position: fixed;
         background: white;
         border: 1px solid #ccc;
         padding: 8px 12px;
         border-radius: 4px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
         z-index: 1000;
         max-width: 250px;
         font-size: 13px;
+      }
+
+      .ninja-page-icon {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: rgba(25, 118, 210, 0.85);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        font-weight: bold;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+        pointer-events: auto;
+        cursor: pointer;
+        z-index: 10000;
+        transition: transform 0.2s ease;
+      }
+
+      .ninja-page-icon[data-page]::after {
+        content: attr(data-page);
+        position: absolute;
+        bottom: -18px;
+        font-size: 11px;
+        color: rgba(0, 0, 0, 0.6);
+        pointer-events: none;
+      }
+
+      .ninja-page-icon:hover {
+        transform: scale(1.05);
+      }
+
+      .ninja-page-icon.is-bookmarked {
+        background: rgba(255, 193, 7, 0.95);
+        color: #fff;
+        box-shadow: 0 3px 12px rgba(255, 193, 7, 0.35);
+      }
+
+      .ninja-page-icon.bookmark-feedback {
+        animation: bookmarkPulse 0.3s ease-out;
+      }
+
+      @keyframes bookmarkPulse {
+        from {
+          transform: scale(1.2);
+        }
+        to {
+          transform: scale(1.05);
+        }
+      }
+
+      /* Selection tooltip for text actions */
+      .selection-tooltip {
+        position: absolute;
+        z-index: 10000;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        padding: 8px;
+        display: flex;
+        gap: 4px;
+        pointer-events: auto;
+        animation: tooltipFadeIn 0.2s ease-out;
+      }
+
+      @keyframes tooltipFadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(-4px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .selection-tooltip-button {
+        width: 36px;
+        height: 36px;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background-color 0.2s;
+        font-size: 18px;
+      }
+
+      .selection-tooltip-button:hover {
+        background-color: rgba(0, 0, 0, 0.05);
+      }
+
+      .selection-tooltip-button:active {
+        background-color: rgba(0, 0, 0, 0.1);
+      }
+
+      /* Color picker for highlights */
+      .highlight-colors {
+        display: flex;
+        gap: 4px;
+        padding: 4px;
+        border-radius: 6px;
+        background: white;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+        position: absolute;
+        bottom: calc(100% + 8px);
+        left: 0;
+        animation: tooltipFadeIn 0.15s ease-out;
+      }
+
+      .color-option {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        cursor: pointer;
+        border: 2px solid transparent;
+        transition: all 0.2s;
+      }
+
+      .color-option:hover {
+        transform: scale(1.1);
+      }
+
+      .color-option.selected {
+        border-color: #333;
+        box-shadow: 0 0 0 2px white, 0 0 0 4px #333;
+      }
+
+      /* Specific color backgrounds */
+      .color-yellow {
+        background: rgba(255, 235, 59, 0.8);
+      }
+      .color-green {
+        background: rgba(129, 199, 132, 0.8);
+      }
+      .color-blue {
+        background: rgba(100, 181, 246, 0.8);
+      }
+      .color-pink {
+        background: rgba(244, 143, 177, 0.8);
+      }
+      .color-orange {
+        background: rgba(255, 183, 77, 0.8);
+      }
+      .color-purple {
+        background: rgba(186, 104, 200, 0.8);
+      }
+
+      /* Tooltip divider */
+      .tooltip-divider {
+        width: 1px;
+        height: 28px;
+        background: rgba(0, 0, 0, 0.1);
+        margin: 0 4px;
       }
     </style>
 
@@ -224,29 +393,45 @@ See https://github.com/adobe-type-tools/cmap-resources
                 console.log("🚀 Opening PDF from postMessage");
                 pdfLoaded = true; // Mark that a PDF has been loaded
                 const desiredPage = parseInt(event.data.page, 10);
-                const openPromise = window.PDFViewerApplication.open(event.data.url);
+                const openPromise = window.PDFViewerApplication.open(
+                  event.data.url
+                );
                 // After the document opens, navigate to the requested page if provided
                 Promise.resolve(openPromise)
                   .then(() => {
                     if (!isNaN(desiredPage) && desiredPage > 0) {
-                      console.log("➡️ Navigating to requested page:", desiredPage);
+                      console.log(
+                        "➡️ Navigating to requested page:",
+                        desiredPage
+                      );
                       // Wait for pages to initialize if needed
                       if (window.PDFViewerApplication.eventBus) {
                         const goTo = () => {
                           window.PDFViewerApplication.page = desiredPage;
                         };
-                        if (window.PDFViewerApplication.pdfViewer && window.PDFViewerApplication.pdfViewer.pagesCount) {
+                        if (
+                          window.PDFViewerApplication.pdfViewer &&
+                          window.PDFViewerApplication.pdfViewer.pagesCount
+                        ) {
                           goTo();
                         } else {
-                          window.PDFViewerApplication.eventBus.on("pagesinit", goTo, { once: true });
+                          window.PDFViewerApplication.eventBus.on(
+                            "pagesinit",
+                            goTo,
+                            { once: true }
+                          );
                         }
                       } else {
                         // Fallback small delay
-                        setTimeout(() => (window.PDFViewerApplication.page = desiredPage), 250);
+                        setTimeout(
+                          () =>
+                            (window.PDFViewerApplication.page = desiredPage),
+                          250
+                        );
                       }
                     }
                   })
-                  .catch(err => console.error("❌ Failed to open PDF:", err));
+                  .catch((err) => console.error("❌ Failed to open PDF:", err));
               } else {
                 console.error("❌ PDFViewerApplication not available");
               }
