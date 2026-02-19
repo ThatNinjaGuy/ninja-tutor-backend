@@ -4,7 +4,6 @@ Main API router
 from fastapi import APIRouter
 
 from .endpoints import books, auth, ai, quiz, notes, bookmarks, user_library, user_quiz, dashboard, reading_analytics
-from . import proxy
 
 api_router = APIRouter()
 
@@ -18,5 +17,4 @@ api_router.include_router(user_quiz.router, prefix="/user-quiz", tags=["user-qui
 api_router.include_router(notes.router, prefix="/notes", tags=["notes"])
 api_router.include_router(bookmarks.router, prefix="/bookmarks", tags=["bookmarks"])
 api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
-api_router.include_router(proxy.router, prefix="/proxy", tags=["proxy"])
 api_router.include_router(reading_analytics.router, prefix="/reading", tags=["reading-analytics"])

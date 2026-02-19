@@ -2,8 +2,8 @@
 Book management endpoints
 """
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
+from fastapi.responses import FileResponse
 import os
 
 from ....models.book import BookUpload, BookResponse, BookCardResponse, Book
